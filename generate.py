@@ -244,19 +244,24 @@ def load_layout_file(template_path: Path | None = None) -> None:
         except Exception:
             pass
 
-    # 2) Si un template est spécifié, chercher layoutN.json
+    # 2) Si un template est spécifié, chercher le layoutN.json le plus proche (≤ N).
+    #    Ex: template7.png → layout7.json ? non → layout6.json ? non → layout5.json ? oui → utilise layout5.json
+    #    Cela permet à un groupe de templates (5-8) de partager un seul layout5.json.
     if template_path is not None:
-        name = template_path.stem  # "template5"
+        name = template_path.stem
         digits = "".join(c for c in name if c.isdigit())
         if digits:
-            specific = PROJECT_ROOT / f"layout{digits}.json"
-            if specific.exists() and specific != base_path:
-                try:
-                    data = json.loads(specific.read_text(encoding="utf-8"))
-                    if isinstance(data, dict):
-                        _apply_layout_overrides(data)
-                except Exception:
-                    pass
+            num = int(digits)
+            for n in range(num, 0, -1):
+                candidate = PROJECT_ROOT / f"layout{n}.json"
+                if candidate.exists() and candidate != base_path:
+                    try:
+                        data = json.loads(candidate.read_text(encoding="utf-8"))
+                        if isinstance(data, dict):
+                            _apply_layout_overrides(data)
+                    except Exception:
+                        pass
+                    break
 
 
 # Valeurs par défaut initiales (sauvegardées pour reset entre templates)
