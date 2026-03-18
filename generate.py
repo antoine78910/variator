@@ -1,0 +1,1233 @@
+"""
+TikTok-style video generator: creates multiple variations from a template image
+by combining step images, text, and exporting as images, then converting to videos.
+
+Where to put your files:
+- template1.png … template4.png  → project root. One template is chosen per variation (rotation).
+- Step images   → assets/ folder (see ASSETS_IMAGES below).
+- Polices → lancer une fois : python download_fonts.py (télécharge Rubik, Montserrat, Poppins dans fonts/).
+- Audio (optional) → add files in audio_path/ (one per variation) or set AUDIO_SINGLE.
+"""
+
+import argparse
+import itertools
+import json
+import os
+import random
+import subprocess
+import sys
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+# -----------------------------------------------------------------------------
+# Paths (easy to modify)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parent
+# Multiple templates: one is chosen per variation (idx % len).
+TEMPLATE_GLOB = "template*.png"  # template1.png, template2.png, ...
+ASSETS_DIR = PROJECT_ROOT / "assets"
+FONTS_DIR = PROJECT_ROOT / "fonts"
+OUTPUT_IMAGES_DIR = PROJECT_ROOT / "output" / "images"
+OUTPUT_VIDEOS_DIR = PROJECT_ROOT / "output" / "videos"
+
+# Audio: dossier contenant les sons (un fichier différent par variation). Extensions: .mp3, .wav, .m4a.
+AUDIO_DIR = PROJECT_ROOT / "audio_path"
+# Si tu veux un seul fichier fixe, mets par ex. AUDIO_SINGLE = AUDIO_DIR / "ReelAudio-53910.mp3", sinon None.
+AUDIO_SINGLE = None
+
+# App images: on utilise les dossiers find_app, create_store_app, create_ai_ugc_app (pas all-in-one).
+# Mettre True pour utiliser une seule image allinoneapp pour les 3 slots app.
+USE_ALLINONEAPP = False
+APP_FOLDERS = ["find_app", "create_store_app", "create_ai_ugc_app"]
+ALLINONEAPP_FOLDER = "allinoneapp"
+SALES_FOLDER = "sales"
+
+# Zones: (x_frac_left, y_frac_top, w_frac, h_frac). Logos ~3× plus grands (tous les assets). Ajuster si chevauchement.
+APP_ZONES = {
+    "find_app": (0.10, 0.12, 0.90, 0.33),
+    "create_store_app": (0.05, 0.37, 0.90, 0.33),
+    "create_ai_ugc_app": (0.05, 0.62, 0.90, 0.33),
+    "sales": (0.02, 0.88, 0.96, 0.12),
+}
+
+# -----------------------------------------------------------------------------
+# Text variations per step (edit these to add/change options)
+# -----------------------------------------------------------------------------
+STEP_1_OPTIONS = [
+    "Find a winning product",
+    "Find your winner",
+    "Discover a viral product",
+    "Find Your Winning Product",
+    "Find Your Next Winner",
+    "Find a Winning Product Fast",
+    "Find Your Next Product Winner",
+    "Find Products That Actually Sell",
+    "Find Your First Winning Product",
+    "Find High-Converting Products",
+    "Find Your Next Viral Product",
+]
+
+STEP_1_FAVORITES = [
+    "Find a winning product",
+    "Find your winner",
+    "Find Your Winning Product",
+]
+
+STEP_2_OPTIONS = [
+    "Launch Your Store With AI In 5 Minutes",
+    "Build Your Store With AI In Minutes",
+    "Create a Store With AI Instantly",
+    "Start Your AI Store In 5 Minutes",
+    "Launch an AI-Powered Store Fast",
+    "Build Your Ecommerce Store With AI",
+    "Create Your Online Store In Minutes",
+    "AI Builds Your Store In 5 Minutes",
+    "Launch Your Store With AI Instantly",
+]
+
+STEP_3_OPTIONS = [
+    "Generate Realistic UGC With AI",
+    "Create Viral AI UGC Ads",
+    "Create AI UGC And Post On IG / TikTok",
+    "Generate Realistic AI Creators",
+    "Create AI Influencer Content",
+    "Generate Realistic AI UGC Ads",
+]
+
+STEP_4_OPTIONS = [
+    "Make Bank 💰",
+    "Start Making Bank",
+    "Watch The Sales Roll In",
+    "Print Money 💰",
+    "Turn Clicks Into Cash",
+    "Start Printing Sales",
+    "Watch The Money Flow",
+    "Turn Traffic Into Profit",
+    "Cash In 💰",
+    "Cash out",
+    "Let The Sales Come In",
+]
+
+# -----------------------------------------------------------------------------
+# Image layout — titres (x from right, y from top)
+# -----------------------------------------------------------------------------
+# find winner: 0.02y 0.95x -> (0.05, 0.02) left ; create ai store: 0.5x 0.25y -> (0.5, 0.25) center
+# create ai ugc: 0.95x 0.54y -> (0.95, 0.54) right ; make bank: 0.6x 0.89y -> (0.4, 0.89) center
+TEXT_POSITIONS = [  # (x_frac from left, y_frac from top) — x user was "from right", converted: x_left = 1 - x_right
+    (1 - 0.95, 0.02),   # step 1 find winner — haut gauche
+    (0.5, 0.25),        # step 2 create ai store — centre
+    (0.95, 0.54),       # step 3 create ai ugc — droite
+    (0.4, 0.89),       # step 4 make bank
+]
+TEXT_ALIGN = ["left", "center", "right", "center"]  # left, center, right
+FONT_SIZE_RATIO = 0.03   # police réduite
+TEXT_COLOR = (255, 255, 255)
+OUTLINE_COLOR = (0, 0, 0)
+OUTLINE_WIDTH = 2
+
+# Grille 10×10 (labels 0.1 à 1.0) sur les images générées pour positionnement précis. Mettre False pour désactiver.
+ENABLE_GRID_OVERLAY = True
+
+# 3 polices pour les titres (rotation par variation : 0→1, 1→2, 2→3, 3→1…). À mettre dans fonts/ ou Windows/Fonts.
+TITLE_FONTS = ["Rubik-Bold.ttf", "Montserrat-Bold.ttf", "Poppins-Bold.ttf"]
+
+
+def _apply_layout_overrides(data: dict) -> None:
+    """
+    Applique les overrides de layout.json sur APP_ZONES, TEXT_POSITIONS, TEXT_ALIGN, FONT_SIZE_RATIO.
+    data est un dict déjà parsé depuis le JSON.
+    """
+    global APP_ZONES, TEXT_POSITIONS, TEXT_ALIGN, FONT_SIZE_RATIO
+
+    # Zones logos (mode centres optionnel + fallback en mode coin haut-gauche)
+    app_centers = data.get("app_centers")
+    if isinstance(app_centers, dict):
+        new_zones = {}
+        for name, vals in app_centers.items():
+            if (
+                isinstance(vals, (list, tuple))
+                and len(vals) == 4
+                and all(isinstance(v, (int, float)) for v in vals)
+            ):
+                cx, cy, w_frac, h_frac = map(float, vals)
+                x_left = cx - w_frac / 2.0
+                y_top = cy - h_frac / 2.0
+                new_zones[name] = (x_left, y_top, w_frac, h_frac)
+        if new_zones:
+            merged = dict(APP_ZONES)
+            merged.update(new_zones)
+            APP_ZONES = merged
+
+    # Ancien mode: valeurs déjà en (x_left, y_top, w, h)
+    app_zones = data.get("app_zones")
+    if isinstance(app_zones, dict):
+        new_zones = {}
+        for name, vals in app_zones.items():
+            if (
+                isinstance(vals, (list, tuple))
+                and len(vals) == 4
+                and all(isinstance(v, (int, float)) for v in vals)
+            ):
+                new_zones[name] = tuple(float(v) for v in vals)
+        if new_zones:
+            # On conserve les clés existantes si non fournies, pour éviter les crashes.
+            merged = dict(APP_ZONES)
+            merged.update(new_zones)
+            APP_ZONES = merged
+
+    # Positions titres
+    text_positions = data.get("text_positions")
+    if isinstance(text_positions, list) and text_positions:
+        ok = True
+        parsed = []
+        for item in text_positions:
+            if (
+                isinstance(item, (list, tuple))
+                and len(item) == 2
+                and all(isinstance(v, (int, float)) for v in item)
+            ):
+                parsed.append((float(item[0]), float(item[1])))
+            else:
+                ok = False
+                break
+        if ok and parsed:
+            TEXT_POSITIONS = parsed
+
+    # Alignements titres
+    text_align = data.get("text_align")
+    if isinstance(text_align, list) and text_align:
+        if all(isinstance(a, str) for a in text_align):
+            TEXT_ALIGN[:] = text_align[: len(TEXT_ALIGN)]
+
+    # Taille police titres
+    font_size_ratio = data.get("font_size_ratio")
+    if isinstance(font_size_ratio, (int, float)) and font_size_ratio > 0:
+        FONT_SIZE_RATIO = float(font_size_ratio)
+
+
+def load_layout_file() -> None:
+    """
+    Charge layout.json s'il existe et applique les valeurs.
+
+    Exemple de layout.json:
+    {
+      "text_positions": [[0.05, 0.02], [0.5, 0.25], [0.95, 0.54], [0.4, 0.89]],
+      "text_align": ["left", "center", "right", "center"],
+      "font_size_ratio": 0.03,
+      "app_zones": {
+        "find_app": [0.10, 0.12, 0.90, 0.33],
+        "create_store_app": [0.05, 0.37, 0.90, 0.33],
+        "create_ai_ugc_app": [0.05, 0.62, 0.90, 0.33],
+        "sales": [0.02, 0.88, 0.96, 0.12]
+      }
+    }
+    """
+    layout_path = PROJECT_ROOT / "layout.json"
+    if not layout_path.exists():
+        return
+    try:
+        raw = layout_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            _apply_layout_overrides(data)
+    except Exception:
+        # En cas d'erreur JSON ou autre, on ignore et on garde les valeurs par défaut.
+        return
+
+# -----------------------------------------------------------------------------
+# Limit for testing (number of variations). Set to None to generate all.
+# -----------------------------------------------------------------------------
+MAX_VARIATIONS = 4  # 4 images + 4 videos for test; put None for full run
+
+# -----------------------------------------------------------------------------
+# Video settings (FFmpeg)
+# -----------------------------------------------------------------------------
+VIDEO_DURATION_SEC = 6
+FPS = 25
+# Fade variation: 0–1 s noir, puis découverte de 1 s à 5 s (totalement visible à 5 s).
+FADE_START_SEC = 1.0
+FADE_DURATION_SEC = 4.0
+# Caption: pas de fade (texte lisible dès le début)
+
+# -----------------------------------------------------------------------------
+# 9:16 caption videos — fond noir, rectangle blanc (bandeau) en haut, texte centré, vidéo variation centrée en dessous
+# -----------------------------------------------------------------------------
+CAPTION_WIDTH = 1080
+CAPTION_HEIGHT = 1920   # 9:16
+CAPTION_RECT_Y_START = 0.056   # fraction hauteur (bandeau un peu plus haut)
+CAPTION_RECT_Y_END = 0.163
+CAPTION_TEXT_COLOR = (0, 0, 0)
+CAPTION_HIGHLIGHT_COLOR = (255, 0, 0)
+CAPTION_HIGHLIGHT_WORDS = ["2026", "strategy", "Strategy"]
+# Nombre max de vidéos 9:16 à générer par run (prises au hasard dans captions.txt)
+CAPTION_MAX_COUNT = 4
+CAPTION_OPTIONS = [
+    "Best Dropshipping app for 2026",
+    "Best dropshipping strategy for 2026",
+]
+OUTPUT_CAPTION_IMAGES = PROJECT_ROOT / "output" / "caption" / "images"
+OUTPUT_CAPTION_VIDEOS = PROJECT_ROOT / "output" / "caption" / "videos"
+
+
+def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load Rubik Bold first, then fallbacks (pour captions, grille, etc.)."""
+    candidates = [
+        str(FONTS_DIR / "Rubik-Bold.ttf"),
+        "Rubik-Bold.ttf",
+        "C:\\Windows\\Fonts\\Rubik-Bold.ttf",
+        "arial.ttf",
+        "Arial.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    return ImageFont.load_default()
+
+
+def get_title_font(size: int, variation_index: int = 0) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Charge une des 3 polices titres, choisie au hasard pour chaque variation."""
+    # Choix aléatoire dans la liste, pour ne pas avoir toujours Rubik.
+    name = random.choice(TITLE_FONTS)
+    win_fonts = Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"
+    candidates = [
+        str(FONTS_DIR / name),
+        str(FONTS_DIR / "static" / name),
+        name,
+        str(win_fonts / name),
+        str(win_fonts / name.replace("-", " ")),
+        "/usr/share/fonts/truetype/" + name.lower(),
+        "/System/Library/Fonts/Supplemental/" + name,
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    return get_font(size)
+
+
+def get_template_paths() -> list[Path]:
+    """Return sorted list of template files (template1.png, template2.png, ...)."""
+    paths = sorted(PROJECT_ROOT.glob(TEMPLATE_GLOB))
+    return [p for p in paths if p.is_file()]
+
+
+def get_audio_paths() -> list[Path]:
+    """Liste tous les fichiers audio du dossier audio_path (un par variation)."""
+    if not AUDIO_DIR.exists():
+        return []
+    paths = []
+    for ext in ("*.mp3", "*.MP3", "*.wav", "*.m4a", "*.WAV", "*.M4A"):
+        paths.extend(AUDIO_DIR.glob(ext))
+    return sorted(set(p.resolve() for p in paths if p.is_file()))
+
+
+def get_all_text_combinations():
+    """Ancien helper (non utilisé pour la génération principale). Conservé pour compatibilité éventuelle."""
+    return itertools.product(
+        STEP_1_OPTIONS,
+        STEP_2_OPTIONS,
+        STEP_3_OPTIONS,
+        STEP_4_OPTIONS,
+    )
+
+
+def _load_images_from_folder(folder: Path, keep_alpha: bool = False) -> list[Image.Image]:
+    """Load all PNG/JPG from a folder. keep_alpha=True preserves transparency (RGBA) for logos."""
+    out = []
+    for ext in ("*.png", "*.jpg", "*.jpeg"):
+        for p in sorted(folder.glob(ext)):
+            try:
+                im = Image.open(p)
+                if keep_alpha and im.mode in ("RGBA", "LA", "P"):
+                    im = im.convert("RGBA")
+                else:
+                    im = im.convert("RGB")
+                out.append(im)
+            except Exception:
+                continue
+    return out
+
+
+def load_step_images(w: int, h: int) -> dict | None:
+    """Load app images from assets subfolders. Logos en RGBA pour transparence. allinoneapp ignoré si USE_ALLINONEAPP=False."""
+    out = {}
+    if USE_ALLINONEAPP:
+        allinone = ASSETS_DIR / ALLINONEAPP_FOLDER
+        if allinone.exists():
+            imgs = _load_images_from_folder(allinone, keep_alpha=True)
+            out["allinoneapp"] = imgs[0:1] if imgs else None
+        else:
+            out["allinoneapp"] = None
+    else:
+        out["allinoneapp"] = None
+    for name in APP_FOLDERS:
+        folder = ASSETS_DIR / name
+        out[name] = _load_images_from_folder(folder, keep_alpha=True) if folder.exists() else []
+    sales_dir = ASSETS_DIR / SALES_FOLDER
+    out["sales"] = _load_images_from_folder(sales_dir, keep_alpha=True) if sales_dir.exists() else []
+    has_allinone = bool(out.get("allinoneapp"))
+    has_folders = any(out.get(k) for k in APP_FOLDERS)
+    if not has_allinone and not has_folders:
+        return None
+    return out
+
+
+def _app_combo_indices(step_images: dict, variation_index: int) -> dict[str, int]:
+    """Indices pour chaque dossier app (find, create_store, create_ai_ugc) pour avoir toutes les combinaisons."""
+    lengths = [len(step_images.get(k) or []) for k in APP_FOLDERS]
+    if not all(lengths):
+        return {APP_FOLDERS[i]: variation_index % max(1, lengths[i]) for i in range(len(APP_FOLDERS))}
+    n_combos = 1
+    for L in lengths:
+        n_combos *= L
+    combo = variation_index % n_combos
+    indices = {}
+    for i, name in enumerate(APP_FOLDERS):
+        indices[name] = combo % lengths[i]
+        combo //= lengths[i]
+    return indices
+
+
+def paste_step_images(img: Image.Image, step_images: dict, variation_index: int) -> None:
+    """Paste app and sales images at APP_ZONES. Combinaisons indépendantes entre les 3 dossiers app. Logos en ratio uniforme."""
+    w, h = img.size
+    use_allinone = step_images.get("allinoneapp")
+    combo = _app_combo_indices(step_images, variation_index) if not use_allinone else None
+    for slot_name, zone in APP_ZONES.items():
+        if slot_name == "sales":
+            sales_list = step_images.get("sales") or []
+            if not sales_list:
+                continue
+            slot_im = sales_list[variation_index % len(sales_list)]
+        else:
+            if use_allinone:
+                slot_im = use_allinone[0] if use_allinone else None
+            else:
+                lst = step_images.get(slot_name) or []
+                idx = combo.get(slot_name, 0) if combo else (variation_index % len(lst) if lst else 0)
+                slot_im = lst[idx % len(lst)] if lst else None
+        if slot_im is None:
+            continue
+        x_frac, y_frac, w_frac, h_frac = zone
+        x = int(w * x_frac)
+        y = int(h * y_frac)
+        zw = int(w * w_frac)
+        zh = int(h * h_frac)
+        # Agrandir uniformément (conserver ratio, centrer dans la zone)
+        vw, vh = slot_im.size
+        scale = min(zw / vw, zh / vh) if vw and vh else 1.0
+        nw = int(vw * scale)
+        nh = int(vh * scale)
+        resized = slot_im.resize((nw, nh), Image.Resampling.LANCZOS)
+        px = x + (zw - nw) // 2
+        py = y + (zh - nh) // 2
+        if resized.mode == "RGBA":
+            img.paste(resized, (px, py), resized.split()[3])
+        else:
+            img.paste(resized, (px, py))
+    return
+
+
+def render_image(
+    template: Image.Image,
+    lines: tuple[str, ...],
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    step_images: dict[str, Image.Image] | None,
+    variation_index: int,
+) -> Image.Image:
+    """Draw step images (if present) and the four text lines on a copy of the template."""
+    img = template.copy()
+    if step_images:
+        paste_step_images(img, step_images, variation_index)
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    for i, line in enumerate(lines):
+        if i >= len(TEXT_POSITIONS):
+            break
+        title = f"{i + 1}. {line}"
+        x_frac, y_frac = TEXT_POSITIONS[i]
+        align = TEXT_ALIGN[i] if i < len(TEXT_ALIGN) else "center"
+        bbox = draw.textbbox((0, 0), title, font=font)
+        tw = bbox[2] - bbox[0]
+        y = int(h * y_frac)
+        if align == "left":
+            x = int(w * x_frac)
+        elif align == "right":
+            x = int(w * x_frac) - tw
+        else:
+            x = int(w * x_frac) - tw // 2
+        for dx in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
+            for dy in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
+                if dx != 0 or dy != 0:
+                    draw.text((x + dx, y + dy), title, font=font, fill=OUTLINE_COLOR)
+        draw.text((x, y), title, font=font, fill=TEXT_COLOR)
+    return img
+
+
+def draw_grid_on_image(img: Image.Image) -> None:
+    """Dessine une grille 10×10 avec labels 0.1 à 1.0 (en fraction) pour positionnement précis. Modifie img en place."""
+    if not ENABLE_GRID_OVERLAY:
+        return
+    w, h = img.size
+    draw = ImageDraw.Draw(img)
+    grid_color = (120, 120, 120)
+    label_color = (200, 200, 200)
+    font_size = max(10, min(14, int(min(w, h) * 0.012)))
+    try:
+        grid_font = ImageFont.truetype(str(FONTS_DIR / "Rubik-Bold.ttf"), font_size)
+    except Exception:
+        grid_font = ImageFont.load_default()
+    for i in range(11):
+        f = i / 10.0
+        px = int(w * f)
+        py = int(h * f)
+        draw.line([(px, 0), (px, h)], fill=grid_color, width=1)
+        draw.line([(0, py), (w, py)], fill=grid_color, width=1)
+        label = f"{f:.1f}"
+        lb = draw.textbbox((0, 0), label, font=grid_font)
+        lw = lb[2] - lb[0]
+        lh = lb[3] - lb[1]
+        if px > 5 and px < w - lw - 5:
+            draw.text((px - lw // 2, 2), label, font=grid_font, fill=label_color)
+        if py > lh + 2 and py < h - 5:
+            draw.text((2, py - lh // 2), label, font=grid_font, fill=label_color)
+    draw.text((w - 28, 2), "x", font=grid_font, fill=label_color)
+    draw.text((2, h - 14), "y", font=grid_font, fill=label_color)
+
+
+def get_ffmpeg_exe() -> str | None:
+    """Return path to ffmpeg.exe, or None. Tries PATH then WinGet install folder."""
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        return "ffmpeg"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    # WinGet installe souvent ici sans ajouter au PATH
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        winget = Path(local) / "Microsoft" / "WinGet" / "Packages"
+        if winget.exists():
+            for p in winget.iterdir():
+                if not p.is_dir():
+                    continue
+                exe = p / "ffmpeg-8.0.1-full_build" / "bin" / "ffmpeg.exe"
+                if exe.exists():
+                    return str(exe)
+                # autre version possible
+                for sub in p.iterdir():
+                    if sub.is_dir() and "ffmpeg" in sub.name.lower():
+                        bin_exe = sub / "bin" / "ffmpeg.exe"
+                        if bin_exe.exists():
+                            return str(bin_exe)
+    return None
+
+
+def check_ffmpeg() -> bool:
+    """Return True if ffmpeg is available. Print help and return False otherwise."""
+    if get_ffmpeg_exe():
+        return True
+    print("FFmpeg n'est pas installé ou introuvable.")
+    print("  - winget install ffmpeg  puis redémarre le terminal (ou relance le script).")
+    print("  - Ou télécharge: https://www.gyan.dev/ffmpeg/builds/ et ajoute le dossier bin au PATH.")
+    return False
+
+
+def image_to_video(
+    image_path: Path,
+    video_path: Path,
+    width: int,
+    height: int,
+    audio_path: Path | None,
+    fade_duration_sec: float | None = None,
+    fade_start_sec: float | None = None,
+) -> bool:
+    """
+    Convert one image to a vertical video.
+    fade_duration_sec: None = use FADE_DURATION_SEC, 0 = no fade-in (caption).
+    fade_start_sec: None = use FADE_START_SEC (0 pour caption, 1 pour variation).
+    """
+    total_frames = int(VIDEO_DURATION_SEC * FPS)
+    fade_sec = fade_duration_sec if fade_duration_sec is not None else FADE_DURATION_SEC
+    start_sec = fade_start_sec if fade_start_sec is not None else FADE_START_SEC
+    vf = f"fade=t=in:st={start_sec}:d={fade_sec}" if fade_sec > 0 else "null"
+    img_abs = str(image_path.resolve())
+    out_abs = str(video_path.resolve())
+
+    ffmpeg_exe = get_ffmpeg_exe()
+    if not ffmpeg_exe:
+        print("FFmpeg introuvable.")
+        return False
+
+    # Build command: all inputs first, then all output options (required with multiple inputs)
+    cmd = [ffmpeg_exe, "-y", "-loop", "1", "-i", img_abs]
+    if audio_path and audio_path.exists():
+        cmd.extend(["-stream_loop", "-1", "-i", str(audio_path.resolve())])
+    # Output options (after all inputs). No -vf when fade_sec == 0 (pas de fade-in).
+    out_opts = ["-frames:v", str(total_frames), "-r", str(FPS), "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    if fade_sec > 0:
+        out_opts = ["-vf", vf] + out_opts
+    cmd.extend(out_opts)
+    if audio_path and audio_path.exists():
+        cmd.extend(["-map", "0:v", "-map", "1:a", "-t", str(VIDEO_DURATION_SEC), "-c:a", "aac"])
+    else:
+        cmd.append("-an")
+    cmd.append(out_abs)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=False)
+        if result.returncode == 0:
+            return True
+        err = (result.stderr or b"").decode(errors="replace").strip()
+        print(f"FFmpeg error for {image_path.name} (code {result.returncode}):")
+        print(err[-2000:] if len(err) > 2000 else err)
+        # If failure was with audio, retry sans audio (vidéo seule, durée fixe)
+        if audio_path and audio_path.exists():
+            retry_opts = ["-frames:v", str(total_frames), "-r", str(FPS), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", out_abs]
+            if fade_sec > 0:
+                retry_opts = ["-vf", vf] + retry_opts  # vf already uses start_sec
+            cmd_no_audio = [ffmpeg_exe, "-y", "-loop", "1", "-i", img_abs] + retry_opts
+            retry = subprocess.run(cmd_no_audio, capture_output=True, text=False)
+            if retry.returncode == 0:
+                print("  -> Vidéo créée sans audio (l’audio a été ignoré).")
+                return True
+        return False
+    except FileNotFoundError:
+        print("FFmpeg introuvable.")
+        return False
+
+
+def overlay_caption_on_variation(
+    caption_image: Path,
+    variation_video: Path,
+    output_video: Path,
+) -> bool:
+    """
+    Superpose une vidéo variation (avec son fade + audio) sur une caption 9:16 (fond + bandeau + texte, sans fade),
+    façon CapCut: la variation est centrée sous le bandeau, l'audio vient de la variation.
+    """
+    ffmpeg_exe = get_ffmpeg_exe()
+    if not ffmpeg_exe:
+        print("FFmpeg introuvable pour les captions.")
+        return False
+
+    if not variation_video.exists():
+        print(f"Variation video not found for caption: {variation_video}")
+        return False
+
+    img_abs = str(caption_image.resolve())
+    var_abs = str(variation_video.resolve())
+    out_abs = str(output_video.resolve())
+
+    # Zone sous le bandeau blanc (où l'on veut la variation)
+    y0 = int(CAPTION_HEIGHT * CAPTION_RECT_Y_START)
+    y1 = int(CAPTION_HEIGHT * CAPTION_RECT_Y_END)
+    # On laisse un peu plus d'espace noir en bas → on réduit légèrement la hauteur utile
+    zone_h = int((CAPTION_HEIGHT - y1) * 0.85)
+
+    # Filter:
+    #  - Entrée 0: image caption (loopée)
+    #  - Entrée 1: vidéo variation
+    # 1) On scale la variation pour rentrer dans la zone sous le bandeau (force_original_aspect_ratio=decrease)
+    # 2) On overlay au centre horizontalement, et aligné dans la zone verticalement
+    filter_complex = (
+        f"[1:v]scale={CAPTION_WIDTH}:{zone_h}:force_original_aspect_ratio=decrease[vid];"
+        f"[0:v][vid]overlay=(main_w-overlay_w)/2:{y1}"
+    )
+
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-loop",
+        "1",
+        "-i",
+        img_abs,   # 0:v = caption (image)
+        "-i",
+        var_abs,   # 1:v,1:a = variation (avec fade + audio)
+        "-filter_complex",
+        filter_complex,
+        "-r",
+        str(FPS),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-map",
+        "0:v",     # vidéo: résultat overlay
+        "-map",
+        "1:a?",    # audio: piste audio de la variation si présente
+        "-c:a",
+        "aac",
+        "-shortest",
+        out_abs,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=False)
+        if result.returncode == 0:
+            return True
+        err = (result.stderr or b"").decode(errors="replace").strip()
+        print(f"FFmpeg overlay error for {output_video.name} (code {result.returncode}):")
+        print(err[-2000:] if len(err) > 2000 else err)
+        return False
+    except FileNotFoundError:
+        print("FFmpeg introuvable pour les captions.")
+        return False
+
+
+def main(args):
+    OUTPUT_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+
+    template_paths = get_template_paths()
+    if not template_paths:
+        print(f"No templates found matching {TEMPLATE_GLOB} in {PROJECT_ROOT}")
+        print("Add template1.png, template2.png, ... in the project root.")
+        return
+
+    # Preload all templates (same size assumed) for quick access
+    templates = [Image.open(p).convert("RGB") for p in template_paths]
+    width, height = templates[0].size
+    font_size = max(20, int(height * FONT_SIZE_RATIO))
+    print(f"Loaded {len(templates)} templates: {[p.name for p in template_paths]}")
+
+    step_images = load_step_images(width, height)
+    if step_images:
+        parts = [k for k in ("allinoneapp",) + tuple(APP_FOLDERS) + (SALES_FOLDER,) if step_images.get(k)]
+        print(f"Loaded app images from assets/: {', '.join(parts)}")
+    else:
+        print("No app images in assets/ subfolders — using template + text only. Add images in assets/allinoneapp, find_app, create_store_app, create_ai_ugc_app, sales.")
+
+    # Un son par variation (ou un seul fichier si AUDIO_SINGLE est défini)
+    audio_list = get_audio_paths() if not (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else []
+    if AUDIO_SINGLE and AUDIO_SINGLE.exists():
+        print(f"Using single audio: {AUDIO_SINGLE}")
+    elif audio_list:
+        print(f"Using {len(audio_list)} audio files from {AUDIO_DIR} (one per variation)")
+    else:
+        print("No audio (add files in audio_path/ or set AUDIO_SINGLE in generate.py).")
+
+    skip_videos = False
+    if not args.images_only and not check_ffmpeg():
+        print("Génération des images uniquement. Relancez après avoir installé FFmpeg pour créer les vidéos (ou utilisez --videos-only).")
+        skip_videos = True
+
+    total = 0
+    # Génération basée sur échantillonnage aléatoire des textes (plutôt que toutes les combinaisons)
+    max_variations = MAX_VARIATIONS if MAX_VARIATIONS is not None else 4
+    for idx in range(max_variations):
+        # Step 1 avec pondération: ~80% de chances de prendre un des favoris
+        if random.random() < 0.8 and STEP_1_FAVORITES:
+            s1 = random.choice(STEP_1_FAVORITES)
+        else:
+            s1 = random.choice(STEP_1_OPTIONS)
+        s2 = random.choice(STEP_2_OPTIONS)
+        s3 = random.choice(STEP_3_OPTIONS)
+        s4 = random.choice(STEP_4_OPTIONS)
+        lines = (s1, s2, s3, s4)
+        total += 1
+        template = templates[idx % len(templates)]
+        font = get_title_font(font_size, idx)
+        image_name = f"variation_{idx:04d}.png"
+        video_name = f"variation_{idx:04d}.mp4"
+        image_path = OUTPUT_IMAGES_DIR / image_name
+        video_path = OUTPUT_VIDEOS_DIR / video_name
+
+        img = render_image(template, lines, font, step_images, idx)
+        img.save(image_path)
+        print(f"Saved image {total}: {image_name}")
+
+        if not args.images_only and not skip_videos:
+            ap = (AUDIO_SINGLE if (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else None) or (
+                audio_list[idx % len(audio_list)] if audio_list else None
+            )
+            if image_to_video(image_path, video_path, width, height, ap):
+                print(f"  -> video: {video_name}")
+            else:
+                print(f"  -> video failed: {video_name}")
+
+    if args.images_only or skip_videos:
+        print(f"\nDone. Generated {total} images only (no videos). Run with --videos-only to create videos from them.")
+    else:
+        print(f"\nDone. Generated {total} images and videos.")
+    # Génération automatique des captions (9:16, bandeau + texte + variation centrée)
+    print("\n--- Captions (9:16) ---")
+    run_captions(args)
+
+
+def run_preview_position():
+    """
+    Generate a single image showing where text will be placed (grid + coordinates).
+    Open output/images/preview_positions.png to see positions, then adjust TEXT_POSITIONS
+    and FONT_SIZE_RATIO in generate.py without regenerating all variations.
+    """
+    template_paths = get_template_paths()
+    if not template_paths:
+        print(f"No templates found. Add template1.png, ... in {PROJECT_ROOT}")
+        return
+    OUTPUT_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    img = Image.open(template_paths[0]).convert("RGB")
+    w, h = img.size
+    draw = ImageDraw.Draw(img)
+    font_size = max(14, min(24, int(h * 0.02)))
+    try:
+        font = ImageFont.truetype(str(FONTS_DIR / "Rubik-Bold.ttf"), font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    y_fracs_used = set()
+    for i, (x_frac, y_frac) in enumerate(TEXT_POSITIONS):
+        y = int(h * y_frac)
+        x = int(w * x_frac)
+        y_fracs_used.add(round(y_frac, 2))
+        draw.line([(0, y), (w, y)], fill=(255, 0, 0), width=2)
+        label = f"Step {i+1}: x={x_frac:.2f} y={y_frac:.2f}  (x={x}px y={y}px)"
+        bbox = draw.textbbox((0, 0), label, font=font)
+        lw = bbox[2] - bbox[0]
+        draw.rectangle([(5, y - 2), (5 + lw + 10, y + font_size + 4)], fill=(0, 0, 0))
+        draw.text((8, y), label, font=font, fill=(255, 200, 200))
+    for frac in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+        if round(frac, 2) in y_fracs_used:
+            continue
+        y = int(h * frac)
+        draw.line([(0, y), (w, y)], fill=(80, 80, 80), width=1)
+    out_path = OUTPUT_IMAGES_DIR / "preview_positions.png"
+    img.save(out_path)
+    print(f"Preview saved: {out_path}")
+    print("Ouvre cette image pour voir les positions. Ajuste TEXT_POSITIONS et FONT_SIZE_RATIO dans generate.py puis relance --preview-position pour revérifier.")
+
+
+def run_preview_live():
+    """
+    Boucle de preview "temps réel" pour ajuster TEXT_POSITIONS, FONT_SIZE_RATIO et APP_ZONES.
+
+    - Génére output/images/preview_live.png avec:
+        * les lignes et labels des titres (comme run_preview_position)
+        * des rectangles colorés pour les zones de logos (APP_ZONES)
+    - Ne s'arrête pas tant que tu n'as pas tapé 'q' puis Entrée.
+
+    Workflow:
+      1) Lancer: python generate.py --preview-live
+      2) Ouvrir preview_live.png dans un viewer (il se mettra à jour à chaque sauvegarde).
+      3) Modifier TEXT_POSITIONS, FONT_SIZE_RATIO, APP_ZONES en haut de generate.py.
+      4) Revenir dans le terminal et appuyer sur Entrée pour regénérer l'image.
+      5) Quand c'est bon, taper 'q' puis Entrée pour quitter.
+    """
+    template_paths = get_template_paths()
+    if not template_paths:
+        print(f"No templates found. Add template1.png, ... in {PROJECT_ROOT}")
+        return
+    OUTPUT_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("Mode preview live.")
+    print("  - Ouvre output/images/preview_live.png dans un viewer.")
+    print("  - Modifie layout.json (text_positions, font_size_ratio, app_centers/app_zones).")
+    print("  - Puis appuie sur Entrée ici pour regénérer (q + Entrée pour quitter).")
+
+    while True:
+        # Recharger le layout à CHAQUE boucle pour prendre en compte les changements dans layout.json
+        load_layout_file()
+
+        # Charger un template
+        base = Image.open(template_paths[0]).convert("RGB")
+        w, h = base.size
+
+        # Charger les logos (si présents)
+        step_images = load_step_images(w, h)
+
+        # Exemple de texte (option aléatoire pour chaque step, pour voir différentes longueurs)
+        sample_lines = (
+            random.choice(STEP_1_OPTIONS),
+            random.choice(STEP_2_OPTIONS),
+            random.choice(STEP_3_OPTIONS),
+            random.choice(STEP_4_OPTIONS),
+        )
+        title_font_size = max(20, int(h * FONT_SIZE_RATIO))
+        title_font = get_title_font(title_font_size, 0)
+
+        # Générer une image avec VRAIS titres + logos
+        img = render_image(base, sample_lines, title_font, step_images, variation_index=0)
+
+        # Grille légère pour repères
+        draw_grid_on_image(img)
+        draw = ImageDraw.Draw(img)
+
+        # Police pour labels (infos x/y/w/h)
+        font_size = max(14, min(24, int(h * 0.02)))
+        try:
+            font = ImageFont.truetype(str(FONTS_DIR / "Rubik-Bold.ttf"), font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+        # Titres: indications de coordonnées au-dessus des vrais textes
+        y_fracs_used = set()
+        for i, (x_frac, y_frac) in enumerate(TEXT_POSITIONS):
+            y = int(h * y_frac)
+            x = int(w * x_frac)
+            y_fracs_used.add(round(y_frac, 2))
+            draw.line([(0, y), (w, y)], fill=(255, 0, 0), width=2)
+            label = f"Step {i+1}: x={x_frac:.2f} y={y_frac:.2f}"
+            bbox = draw.textbbox((0, 0), label, font=font)
+            lw = bbox[2] - bbox[0]
+            draw.rectangle([(x, y - font_size - 6), (x + lw + 10, y)], fill=(0, 0, 0, 180))
+            draw.text((x + 5, y - font_size - 4), label, font=font, fill=(255, 200, 200))
+
+        # Zones logos (APP_ZONES) — on affiche maintenant un petit rectangle AU CENTRE de la zone
+        colors = {
+            "find_app": (0, 255, 0),
+            "create_store_app": (0, 200, 255),
+            "create_ai_ugc_app": (255, 200, 0),
+            "sales": (255, 0, 255),
+        }
+        for name, (x_frac, y_frac, w_frac, h_frac) in APP_ZONES.items():
+            # Centre de la zone en fractions
+            cx_frac = x_frac + w_frac / 2.0
+            cy_frac = y_frac + h_frac / 2.0
+
+            # Petit rectangle centré sur (cx, cy) pour représenter le CENTRE du logo
+            cx = int(w * cx_frac)
+            cy = int(h * cy_frac)
+            half = max(4, int(min(w, h) * 0.02))
+            x0 = cx - half
+            y0 = cy - half
+            x1 = cx + half
+            y1 = cy + half
+
+            color = colors.get(name, (255, 255, 0))
+            draw.rectangle([(x0, y0), (x1, y1)], outline=color, width=3)
+            # Label avec les coordonnées du CENTRE (plus simple à manipuler dans layout.json via app_centers)
+            label = f"{name}: cx={cx_frac:.2f}, cy={cy_frac:.2f}, w={w_frac:.2f}, h={h_frac:.2f}"
+            bbox = draw.textbbox((0, 0), label, font=font)
+            lw = bbox[2] - bbox[0]
+            lh = bbox[3] - bbox[1]
+            tx = max(5, min(x0 + 5, w - lw - 5))
+            ty = max(5, y0 - lh - 6)
+            draw.rectangle([(tx - 3, ty - 2), (tx + lw + 6, ty + lh + 2)], fill=(0, 0, 0, 200))
+            draw.text((tx, ty), label, font=font, fill=color)
+
+        out_path = OUTPUT_IMAGES_DIR / "preview_live.png"
+        img.save(out_path)
+        print(f"Preview live saved: {out_path}")
+
+        try:
+            cmd = input("Entrée pour regénérer, 'q' + Entrée pour quitter: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nQuit.")
+            break
+        if cmd == "q":
+            print("Quit.")
+            break
+
+
+def _get_first_variation_image() -> Image.Image | None:
+    """Load first variation image from output/images/ (variation_0000.png, etc.) for centering in caption."""
+    for p in sorted(OUTPUT_IMAGES_DIR.glob("variation_*.png")):
+        try:
+            return Image.open(p).convert("RGB")
+        except Exception:
+            continue
+    return None
+
+
+def _wrap_caption_text(
+    text: str, draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, width: int
+) -> list[str]:
+    """
+    Si le texte est trop long (bords trop proches de 0 ou 1 en x),
+    on force un retour à la ligne approximativement au milieu de la phrase.
+    """
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    # On veut que les bords soient dans [0.05, 0.95] → largeur max ~ 0.9 * largeur image
+    if tw <= width * 0.90:
+        return [text]
+
+    # Chercher un espace près du milieu pour couper la phrase
+    mid = len(text) // 2
+    split_idx = None
+    # d'abord vers la droite
+    for i in range(mid, len(text)):
+        if text[i] == " ":
+            split_idx = i
+            break
+    # puis vers la gauche si rien trouvé ou si plus proche
+    for i in range(mid, -1, -1):
+        if text[i] == " ":
+            if split_idx is None or mid - i < split_idx - mid:
+                split_idx = i
+            break
+    if split_idx is None:
+        return [text]
+    line1 = text[:split_idx].strip()
+    line2 = text[split_idx + 1 :].strip()
+    if not line1 or not line2:
+        return [text]
+    return [line1, line2]
+
+
+def _draw_centered_colored_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    center_x: int,
+    y: int,
+) -> None:
+    """
+    Dessine le texte centré horizontalement.
+    Parfois, un mot important (2026, strategy, ...) est coloré en rouge.
+    """
+    # Chance de surligner (pas tout le temps)
+    highlight = random.random() < 0.7
+
+    # Chercher un mot à surligner
+    word = None
+    idx = -1
+    lower = text.lower()
+    if highlight:
+        for w in CAPTION_HIGHLIGHT_WORDS:
+            w_lower = w.lower()
+            pos = lower.find(w_lower)
+            if pos != -1:
+                word = text[pos : pos + len(w)]
+                idx = pos
+                break
+
+    if not word or idx < 0:
+        # Pas de surlignage : texte simple centré
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        x = center_x - tw // 2
+        draw.text((x, y), text, font=font, fill=CAPTION_TEXT_COLOR)
+        return
+
+    prefix = text[:idx]
+    highlight_text = text[idx : idx + len(word)]
+    suffix = text[idx + len(word) :]
+
+    # Largeurs
+    pw = draw.textbbox((0, 0), prefix, font=font)[2]
+    hw = draw.textbbox((0, 0), highlight_text, font=font)[2]
+    sw = draw.textbbox((0, 0), suffix, font=font)[2]
+    total = pw + hw + sw
+    x = center_x - total // 2
+
+    if prefix:
+        draw.text((x, y), prefix, font=font, fill=CAPTION_TEXT_COLOR)
+    x += pw
+    draw.text((x, y), highlight_text, font=font, fill=CAPTION_HIGHLIGHT_COLOR)
+    x += hw
+    if suffix:
+        draw.text((x, y), suffix, font=font, fill=CAPTION_TEXT_COLOR)
+
+
+def _get_car_icon_for_caption(text: str) -> Image.Image | None:
+    """
+    Si le texte mentionne une marque (bmw, audi, kawasaki, lambo, ferrari, porsche, tesla, mclaren),
+    charge l'icône depuis assets/cars. Le fond blanc / quasi blanc est rendu transparent.
+    """
+    cars_map = {
+        "bmw": "bmw.png",
+        "audi": "audi.png",
+        "kawasaki": "kawasaki.png",
+        "lambo": "lambo.png",
+        "lamborghini": "lambo.png",
+        "ferrari": "ferrari.png",
+        "porsche": "porsche.png",
+        "tesla": "tesla.png",
+        "mclaren": "mclaren.png",
+    }
+    lower = text.lower()
+    target = None
+    for key, filename in cars_map.items():
+        if key in lower:
+            target = filename
+            break
+    if not target:
+        return None
+    path = ASSETS_DIR / "cars" / target
+    if not path.exists():
+        return None
+    try:
+        im = Image.open(path)
+        if im.mode != "RGBA":
+            im = im.convert("RGBA")
+        # Rendre le fond blanc / quasi blanc transparent
+        data = list(im.getdata())
+        thresh = 240
+        new_data = [
+            (r, g, b, 0) if (r >= thresh and g >= thresh and b >= thresh) else (r, g, b, a)
+            for r, g, b, a in data
+        ]
+        im.putdata(new_data)
+        return im
+    except Exception:
+        return None
+
+
+def render_caption_image(text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> Image.Image:
+    """Fond noir 9:16, rectangle blanc 0.07–0.22 y (toute la largeur), texte centré (une ou deux lignes), puis image variation centrée en dessous."""
+    img = Image.new("RGB", (CAPTION_WIDTH, CAPTION_HEIGHT), (0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    y0 = int(CAPTION_HEIGHT * CAPTION_RECT_Y_START)
+    y1 = int(CAPTION_HEIGHT * CAPTION_RECT_Y_END)
+    draw.rectangle([(0, y0), (CAPTION_WIDTH, y1)], fill=(255, 255, 255))
+
+    # Icône de voiture éventuelle liée au texte
+    car_icon = _get_car_icon_for_caption(text)
+    band_height = y1 - y0
+
+    # Gestion du retour à la ligne automatique si le texte touche trop les bords
+    lines = _wrap_caption_text(text, draw, font, CAPTION_WIDTH)
+    # Hauteur totale du bloc de texte
+    line_heights: list[int] = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_heights.append(bbox[3] - bbox[1])
+    total_text_h = sum(line_heights) + max(0, (len(lines) - 1) * 4)
+
+    # Si icône voiture, réserver un espace en bas du bandeau
+    car_h = 0
+    if car_icon is not None:
+        # Hauteur max de l'icône: ~40% du bandeau
+        max_car_h = int(band_height * 0.4)
+        cw, ch = car_icon.size
+        if ch > 0 and cw > 0:
+            scale = min(max_car_h / ch, (CAPTION_WIDTH * 0.4) / cw)
+            if scale > 0:
+                nw = int(cw * scale)
+                nh = int(ch * scale)
+                car_icon = car_icon.resize((nw, nh), Image.Resampling.LANCZOS)
+                car_h = nh + 6  # padding au-dessus
+        # Sinon, on ne l'affichera pas
+
+    # Zone disponible pour le texte: le bandeau moins la zone pour l'icône voiture
+    available_h = band_height - car_h
+    start_y = y0 + max(0, (available_h - total_text_h) // 2)
+
+    cy = start_y
+    for i, line in enumerate(lines):
+        lh = line_heights[i]
+        _draw_centered_colored_text(draw, line, font, CAPTION_WIDTH // 2, cy)
+        cy += lh + 4
+
+    # Dessiner l'icône voiture au bas du bandeau, centrée (avec transparence)
+    if car_icon is not None and car_h > 0:
+        nw, nh = car_icon.size
+        px = (CAPTION_WIDTH - nw) // 2
+        py = y1 - nh - 3
+        img.paste(car_icon, (px, py), car_icon.split()[3] if car_icon.mode == "RGBA" else car_icon)
+
+    # Ne pas incruster d'image variation ici: la vidéo caption superpose la variation en overlay,
+    # donc une seule variation visible (pas de double superposition).
+    return img
+
+
+def run_captions(args) -> None:
+    """
+    Generate 9:16 caption images (fond noir + bandeau blanc + texte),
+    puis superpose une vidéo variation.mp4 par-dessus (comme dans CapCut):
+      - la caption n'a PAS de fade,
+      - la variation garde son fade + son audio.
+    """
+    OUTPUT_CAPTION_IMAGES.mkdir(parents=True, exist_ok=True)
+    OUTPUT_CAPTION_VIDEOS.mkdir(parents=True, exist_ok=True)
+    font_size = max(36, int(CAPTION_HEIGHT * 0.032))
+    font = get_font(font_size)
+    skip_videos = False
+    if not args.images_only and not check_ffmpeg():
+        skip_videos = True
+        print("Vidéos caption ignorées (FFmpeg manquant). Générez les images puis relancez avec --videos-only après installation de FFmpeg.")
+    # Charger les captions depuis un fichier externe si présent
+    captions_path = PROJECT_ROOT / "captions.txt"
+    if captions_path.exists():
+        raw = captions_path.read_text(encoding="utf-8").splitlines()
+        captions_all = [ln.strip() for ln in raw if ln.strip() and not ln.strip().startswith("#")]
+        if not captions_all:
+            captions_all = CAPTION_OPTIONS
+    else:
+        captions_all = CAPTION_OPTIONS
+
+    # On ne génère qu'un petit nombre de captions par run, choisies au hasard.
+    max_count = min(CAPTION_MAX_COUNT, len(captions_all))
+    indices = list(range(len(captions_all)))
+    random.shuffle(indices)
+    selected_indices = indices[:max_count]
+
+    for out_idx, cap_idx in enumerate(selected_indices):
+        text = captions_all[cap_idx]
+        img = render_caption_image(text, font)
+        name = f"caption_{out_idx:04d}.png"
+        img_path = OUTPUT_CAPTION_IMAGES / name
+        img.save(img_path)
+        print(f"Saved {name}: \"{text}\"")
+        if not args.images_only and not skip_videos:
+            video_path = OUTPUT_CAPTION_VIDEOS / name.replace(".png", ".mp4")
+            # On prend la variation_out_idx comme source (ou la première dispo en fallback)
+            variation_path = OUTPUT_VIDEOS_DIR / f"variation_{out_idx:04d}.mp4"
+            if not variation_path.exists():
+                variations = sorted(OUTPUT_VIDEOS_DIR.glob("variation_*.mp4"))
+                variation_path = variations[0] if variations else None
+            if variation_path is None:
+                print("No variation videos found for captions. Run generate.py sans --captions d'abord.")
+            else:
+                if overlay_caption_on_variation(img_path, variation_path, video_path):
+                    print(f"  -> {video_path.name} (overlay on {variation_path.name})")
+                else:
+                    print(f"  -> video failed: {video_path.name}")
+    print(f"\nDone. Generated {len(CAPTION_OPTIONS)} caption images and videos in output/caption/.")
+
+
+def run_videos_only():
+    """Convert existing images in output/images/ to videos (no new images)."""
+    if not check_ffmpeg():
+        sys.exit(1)
+    OUTPUT_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    audio_list = get_audio_paths() if not (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else []
+    images = sorted(OUTPUT_IMAGES_DIR.glob("variation_*.png"))
+    if not images:
+        print(f"No images found in {OUTPUT_IMAGES_DIR}. Run with --images-only first.")
+        return
+    limit = MAX_VARIATIONS if MAX_VARIATIONS is not None else len(images)
+    to_process = images[:limit]
+    print(f"Creating videos from {len(to_process)} images (limit: {limit})...")
+    for idx, image_path in enumerate(to_process):
+        with Image.open(image_path) as im:
+            width, height = im.size
+        video_path = OUTPUT_VIDEOS_DIR / image_path.name.replace(".png", ".mp4")
+        ap = (AUDIO_SINGLE if (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else None) or (
+            audio_list[idx % len(audio_list)] if audio_list else None
+        )
+        if image_to_video(image_path, video_path, width, height, ap):
+            print(f"  -> {video_path.name}")
+        else:
+            print(f"  -> failed: {video_path.name}")
+    print(f"\nDone. Generated {len(to_process)} videos.")
+
+
+if __name__ == "__main__":
+    # Appliquer les éventuels overrides de layout.json une fois au démarrage
+    load_layout_file()
+
+    parser = argparse.ArgumentParser(description="Generate TikTok-style variation images and/or videos.")
+    parser.add_argument("--images-only", action="store_true", help="Only generate images (no videos).")
+    parser.add_argument("--videos-only", action="store_true", help="Only convert existing images to videos (no new images).")
+    parser.add_argument("--preview-position", action="store_true", help="Generate preview_positions.png to see text positions (grille + coordonnées).")
+    parser.add_argument("--preview-live", action="store_true", help="Live preview: regenerate preview_live.png in a loop while you tweak TEXT_POSITIONS / APP_ZONES.")
+    parser.add_argument("--captions", action="store_true", help="Generate 9:16 caption videos (fond noir, bandeau blanc, texte type Best Dropshipping app for 2026).")
+    args = parser.parse_args()
+
+    if args.preview_position:
+        run_preview_position()
+    elif args.preview_live:
+        run_preview_live()
+    elif args.captions:
+        run_captions(args)
+    elif args.videos_only:
+        run_videos_only()
+    else:
+        main(args)

@@ -1,0 +1,37 @@
+Comment lancer la génération
+============================
+
+Prérequis :
+  - Python + Pillow :  pip install -r requirements.txt
+  - FFmpeg (pour les vidéos) : doit être installé et dans le PATH.
+    Si les vidéos échouent avec "file not found", installe FFmpeg puis ajoute-le au PATH.
+    Téléchargement : https://ffmpeg.org/download.html  ou  winget install ffmpeg
+
+Test (4 images + 4 vidéos)
+-------------------------
+  Option 1 — Tout en un (images puis vidéos pour chaque variation) :
+    python generate.py
+
+  Option 2 — D’abord les images seulement, puis les vidéos :
+    python generate.py --images-only
+    python generate.py --videos-only
+
+Résultats :
+  - Images : output/images/  (variation_0000.png … variation_0003.png)
+  - Vidéos : output/videos/  (variation_0000.mp4 … variation_0003.mp4)
+
+Génération complète (toutes les variantes)
+-----------------------------------------
+Dans generate.py, mets  MAX_VARIATIONS = None  puis :
+  python generate.py
+  ou  python generate.py --images-only  puis  python generate.py --videos-only
+
+Fade-in des vidéos : 6 secondes (modifiable via FADE_DURATION_SEC dans generate.py).
+
+Vidéos 9:16 « caption » (fond noir + bandeau blanc + texte)
+----------------------------------------------------------
+  python generate.py --captions
+
+  Génère des images et vidéos 9:16 (1080×1920) : fond noir, rectangle blanc entre 0.15 et 0.30 en y (toute la largeur), texte Rubik Bold type « Best Dropshipping app for 2026 ». Les textes sont dans CAPTION_OPTIONS dans generate.py.
+  Résultats : output/caption/images/  et  output/caption/videos/
+  Pour images seules :  python generate.py --captions --images-only

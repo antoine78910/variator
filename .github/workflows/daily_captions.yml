@@ -1,0 +1,48 @@
+name: Daily Captions
+
+on:
+  schedule:
+    # Every day at 7:00 UTC (= 9:00 Paris time in winter, 8:00 in summer)
+    - cron: "0 7 * * *"
+  workflow_dispatch: # Manual trigger from GitHub UI
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write service account key
+        run: echo '${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}' > /tmp/sa_key.json
+
+      - name: Generate captions
+        run: python daily_captions.py --server
+
+      - name: Upload to Google Drive
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_SERVICE_ACCOUNT: /tmp/sa_key.json
+        run: python upload_to_drive.py
+
+      - name: Cleanup service account key
+        if: always()
+        run: rm -f /tmp/sa_key.json

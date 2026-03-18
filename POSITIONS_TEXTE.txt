@@ -1,0 +1,28 @@
+Comment connaître la position exacte du texte sans tout régénérer
+==================================================================
+
+Méthode 1 — Grille de prévisualisation (recommandé)
+----------------------------------------------------
+  python generate.py --preview-position
+
+  Cela génère une seule image : output/images/preview_positions.png
+  - Lignes rouges = positions actuelles du texte (Step 1, 2, 3, 4) avec y_frac et y en pixels.
+  - Lignes grises = grille tous les 10 % pour repérer.
+
+  Ouvre cette image, note les y_frac (ou y en pixels) que tu veux, puis dans generate.py modifie :
+    TEXT_Y_POSITIONS = [0.15, 0.35, 0.55, 0.75]   # remplace par tes valeurs (0 = haut, 1 = bas)
+    FONT_SIZE_RATIO = 0.06   # taille = ce ratio × hauteur image (ex. 0.05 = plus petit)
+
+  Relance  python generate.py --preview-position  pour revérifier sans générer toutes les variantes.
+
+
+Méthode 2 — Utiliser Canva pour repérer position et taille
+-----------------------------------------------------------
+  1. Crée un design avec la même taille que ton template (ex. 1080 × 1920 px).
+  2. Importe ton template en arrière-plan.
+  3. Ajoute un bloc de texte, place-le où tu veux et note :
+     - Position Y (en pixels) → dans le script : y_frac = Y / 1920 (si hauteur = 1920).
+     - Taille de la police (ex. 72 pt) → approximativement : FONT_SIZE_RATIO ≈ 72 / 1920 ≈ 0.0375.
+  4. Recopie ces valeurs dans generate.py (TEXT_Y_POSITIONS et FONT_SIZE_RATIO).
+
+  Canva affiche souvent la position en pixels quand tu sélectionnes un élément (ou dans les paramètres du bloc).
