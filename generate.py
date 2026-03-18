@@ -122,6 +122,64 @@ STEP_4_OPTIONS = [
     "Let The Sales Come In",
     "Make Bank Like This",
     "make bank like crazy",
+    "Make Sh*t Ton of Money",
+]
+
+# Car brands for dynamic step4 text (used when caption mentions a car)
+CAR_BRANDS_DISPLAY = {
+    "bmw": "BMW", "audi": "Audi", "kawasaki": "Kawasaki",
+    "lambo": "Lamborghini", "lamborghini": "Lamborghini",
+    "ferrari": "Ferrari", "porsche": "Porsche", "tesla": "Tesla",
+    "mclaren": "McLaren",
+}
+
+STEP_4_CAR_TEMPLATES = [
+    "Get your {car}",
+    "The first of your descendants to turn the key of a {car}",
+]
+
+# ---------------------------------------------------------------------------
+# Templates 9-12: phrases courtes + suffixe "on" / "with"
+# ---------------------------------------------------------------------------
+STEP_1_OPTIONS_SUFFIX = [
+    "Find your winner on",
+    "Find a winning product on",
+    "Get your Winning Product on",
+    "Find Your Winner with",
+    "Discover a viral product on",
+    "Find Your Next Winner on",
+]
+
+STEP_1_FAVORITES_SUFFIX = [
+    "Find your winner on",
+    "Get your Winning Product on",
+    "Find a winning product on",
+]
+
+STEP_2_OPTIONS_SUFFIX = [
+    "Create your Store with",
+    "Build Your Store with",
+    "Launch Your Store with",
+    "Create your AI Store with",
+    "Start Your Store with",
+]
+
+STEP_3_OPTIONS_SUFFIX = [
+    "Create your AI UGC with",
+    "Generate your AI UGC with",
+    "Create AI UGC Ads with",
+    "Generate AI Creators with",
+    "Create AI Influencer Content with",
+]
+
+STEP_4_OPTIONS_SUFFIX = [
+    "Make Bank 💰",
+    "Cash In 💰",
+    "Print Money 💰",
+    "Make Sh*t Ton of Money",
+    "Make Bank Like This",
+    "Turn Clicks Into Cash",
+    "Cash out",
 ]
 
 # -----------------------------------------------------------------------------
@@ -279,6 +337,51 @@ _DEFAULT_TEXT_POSITIONS = [
 ]
 _DEFAULT_TEXT_ALIGN = ["left", "center", "right", "center"]
 _DEFAULT_FONT_SIZE_RATIO = 0.03
+
+
+def _template_group(template_path: Path) -> str:
+    """Return layout group: 'suffix' for templates 9-12, 'alt' for 5-8, 'default' for 1-4."""
+    digits = "".join(c for c in template_path.stem if c.isdigit())
+    if digits:
+        n = int(digits)
+        if n >= 9:
+            return "suffix"
+        if n >= 5:
+            return "alt"
+    return "default"
+
+
+def _pick_step_texts(template_path: Path, caption_text: str | None = None) -> tuple[str, str, str, str]:
+    """Pick random step texts adapted to the template group."""
+    group = _template_group(template_path)
+
+    if group == "suffix":
+        if random.random() < 0.8 and STEP_1_FAVORITES_SUFFIX:
+            s1 = random.choice(STEP_1_FAVORITES_SUFFIX)
+        else:
+            s1 = random.choice(STEP_1_OPTIONS_SUFFIX)
+        s2 = random.choice(STEP_2_OPTIONS_SUFFIX)
+        s3 = random.choice(STEP_3_OPTIONS_SUFFIX)
+        s4 = random.choice(STEP_4_OPTIONS_SUFFIX)
+    else:
+        if random.random() < 0.8 and STEP_1_FAVORITES:
+            s1 = random.choice(STEP_1_FAVORITES)
+        else:
+            s1 = random.choice(STEP_1_OPTIONS)
+        s2 = random.choice(STEP_2_OPTIONS)
+        s3 = random.choice(STEP_3_OPTIONS)
+        s4 = random.choice(STEP_4_OPTIONS)
+
+    # Dynamic car-based step4: if a caption mentions a car brand, sometimes use a car phrase
+    if caption_text and random.random() < 0.4:
+        lower = caption_text.lower()
+        for key, display in CAR_BRANDS_DISPLAY.items():
+            if key in lower:
+                tpl = random.choice(STEP_4_CAR_TEMPLATES)
+                s4 = tpl.format(car=display)
+                break
+
+    return (s1, s2, s3, s4)
 
 
 def _reset_layout_defaults() -> None:
@@ -775,18 +878,11 @@ def main(args):
     total = 0
     max_variations = MAX_VARIATIONS if MAX_VARIATIONS is not None else 4
     for idx in range(max_variations):
-        if random.random() < 0.8 and STEP_1_FAVORITES:
-            s1 = random.choice(STEP_1_FAVORITES)
-        else:
-            s1 = random.choice(STEP_1_OPTIONS)
-        s2 = random.choice(STEP_2_OPTIONS)
-        s3 = random.choice(STEP_3_OPTIONS)
-        s4 = random.choice(STEP_4_OPTIONS)
-        lines = (s1, s2, s3, s4)
-        total += 1
         tpl_idx = idx % len(templates)
         template = templates[tpl_idx]
         load_layout_file(template_paths[tpl_idx])
+        lines = _pick_step_texts(template_paths[tpl_idx])
+        total += 1
         font_size = max(20, int(height * FONT_SIZE_RATIO))
         font = get_title_font(font_size, idx)
         image_name = f"variation_{idx:04d}.png"
@@ -895,13 +991,7 @@ def run_preview_live(template_num: int | None = None):
         # Charger les logos (si présents)
         step_images = load_step_images(w, h)
 
-        # Exemple de texte (option aléatoire pour chaque step, pour voir différentes longueurs)
-        sample_lines = (
-            random.choice(STEP_1_OPTIONS),
-            random.choice(STEP_2_OPTIONS),
-            random.choice(STEP_3_OPTIONS),
-            random.choice(STEP_4_OPTIONS),
-        )
+        sample_lines = _pick_step_texts(chosen_path)
         title_font_size = max(20, int(h * FONT_SIZE_RATIO))
         title_font = get_title_font(title_font_size, 0)
 
