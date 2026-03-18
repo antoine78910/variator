@@ -1,10 +1,10 @@
 {
   "//": "Layout pour templates 5-8 — positions inversées / diagonale gauche-droite",
   "text_positions": [
-    [0.50, 0.03],
-    [0.4, 0.32],
-    [0.3, 0.54],
-    [0.72, 0.67]
+    [0.3, 0.03],
+    [0.45, 0.32],
+    [0.05, 0.54],
+    [0.63, 0.66]
   ],
   "text_align": ["center", "left", "right", "center"],
   "font_size_ratio": 0.019,

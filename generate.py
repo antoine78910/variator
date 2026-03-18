@@ -992,7 +992,9 @@ def run_preview_live(template_num: int | None = None):
         title_font = get_title_font(title_font_size, 0)
 
         # Générer une image avec VRAIS titres + logos
-        img = render_image(base, sample_lines, title_font, step_images, variation_index=0)
+        # On varie l'index pour voir aussi différents logos (pas seulement les titres) en preview.
+        preview_idx = random.randint(0, 10_000_000)
+        img = render_image(base, sample_lines, title_font, step_images, variation_index=preview_idx)
 
         # Grille légère pour repères
         draw_grid_on_image(img)
