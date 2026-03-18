@@ -874,7 +874,7 @@ def main(args):
     total = 0
     max_variations = MAX_VARIATIONS if MAX_VARIATIONS is not None else 4
     for idx in range(max_variations):
-        tpl_idx = idx % len(templates)
+        tpl_idx = random.randint(0, len(templates) - 1)
         template = templates[tpl_idx]
         load_layout_file(template_paths[tpl_idx])
         lines = _pick_step_texts(template_paths[tpl_idx])

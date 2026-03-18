@@ -2,8 +2,8 @@ name: Daily Captions
 
 on:
   schedule:
-    # Every day at 7:00 UTC (= 9:00 Paris time in winter, 8:00 in summer)
-    - cron: "0 7 * * *"
+    # Every day at 14:50 UTC (= 16:50 Paris summer / 15:50 winter)
+    - cron: "50 14 * * *"
   workflow_dispatch: # Manual trigger from GitHub UI
 
 jobs:
