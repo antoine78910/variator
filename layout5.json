@@ -1,0 +1,17 @@
+{
+  "//": "Layout pour template5.png — positions inversées / diagonale gauche-droite",
+  "text_positions": [
+    [0.50, 0.04],
+    [0.05, 0.30],
+    [0.95, 0.56],
+    [0.50, 0.88]
+  ],
+  "text_align": ["center", "left", "right", "center"],
+  "font_size_ratio": 0.028,
+  "app_centers": {
+    "find_app": [0.25, 0.16, 0.45, 0.22],
+    "create_store_app": [0.75, 0.42, 0.45, 0.22],
+    "create_ai_ugc_app": [0.25, 0.68, 0.45, 0.22],
+    "sales": [0.50, 0.92, 0.90, 0.14]
+  }
+}

@@ -66,12 +66,17 @@ STEP_1_OPTIONS = [
     "Find Your First Winning Product",
     "Find High-Converting Products",
     "Find Your Next Viral Product",
+    "Let AI find you a winning product",
+    "Find your Winning Product with AI",
+    "Get your Winning Product",
 ]
 
 STEP_1_FAVORITES = [
     "Find a winning product",
     "Find your winner",
     "Find Your Winning Product",
+    "Find your Winning Product with AI",
+    "Get your Winning Product",
 ]
 
 STEP_2_OPTIONS = [
@@ -84,6 +89,9 @@ STEP_2_OPTIONS = [
     "Create Your Online Store In Minutes",
     "AI Builds Your Store In 5 Minutes",
     "Launch Your Store With AI Instantly",
+    "Create your store with AI in 5min",
+    "Create your Store with AI",
+    "Create your AI Store in min",
 ]
 
 STEP_3_OPTIONS = [
@@ -93,6 +101,11 @@ STEP_3_OPTIONS = [
     "Generate Realistic AI Creators",
     "Create AI Influencer Content",
     "Generate Realistic AI UGC Ads",
+    "Create your AI UGC army",
+    "Create your AI UGC",
+    "Generate your AI UGC",
+    "Create your AI UGC & Post it on ig",
+    "Create your AI UGC & Post it on Tiktok",
 ]
 
 STEP_4_OPTIONS = [
@@ -107,6 +120,8 @@ STEP_4_OPTIONS = [
     "Cash In 💰",
     "Cash out",
     "Let The Sales Come In",
+    "Make Bank Like This",
+    "make bank like crazy",
 ]
 
 # -----------------------------------------------------------------------------
@@ -206,34 +221,68 @@ def _apply_layout_overrides(data: dict) -> None:
         FONT_SIZE_RATIO = float(font_size_ratio)
 
 
-def load_layout_file() -> None:
+def load_layout_file(template_path: Path | None = None) -> None:
     """
-    Charge layout.json s'il existe et applique les valeurs.
+    Charge le layout correspondant au template.
 
-    Exemple de layout.json:
-    {
-      "text_positions": [[0.05, 0.02], [0.5, 0.25], [0.95, 0.54], [0.4, 0.89]],
-      "text_align": ["left", "center", "right", "center"],
-      "font_size_ratio": 0.03,
-      "app_zones": {
-        "find_app": [0.10, 0.12, 0.90, 0.33],
-        "create_store_app": [0.05, 0.37, 0.90, 0.33],
-        "create_ai_ugc_app": [0.05, 0.62, 0.90, 0.33],
-        "sales": [0.02, 0.88, 0.96, 0.12]
-      }
-    }
+    Convention:
+      - template5.png → layout5.json (s'il existe), sinon layout.json
+      - template1.png → layout.json (pas de layout1.json spécifique)
+
+    On réinitialise d'abord avec layout.json (base), puis on applique le layout
+    spécifique au template par-dessus si présent.
     """
-    layout_path = PROJECT_ROOT / "layout.json"
-    if not layout_path.exists():
-        return
-    try:
-        raw = layout_path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            _apply_layout_overrides(data)
-    except Exception:
-        # En cas d'erreur JSON ou autre, on ignore et on garde les valeurs par défaut.
-        return
+    _reset_layout_defaults()
+
+    # 1) Toujours charger layout.json comme base
+    base_path = PROJECT_ROOT / "layout.json"
+    if base_path.exists():
+        try:
+            data = json.loads(base_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _apply_layout_overrides(data)
+        except Exception:
+            pass
+
+    # 2) Si un template est spécifié, chercher layoutN.json
+    if template_path is not None:
+        name = template_path.stem  # "template5"
+        digits = "".join(c for c in name if c.isdigit())
+        if digits:
+            specific = PROJECT_ROOT / f"layout{digits}.json"
+            if specific.exists() and specific != base_path:
+                try:
+                    data = json.loads(specific.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        _apply_layout_overrides(data)
+                except Exception:
+                    pass
+
+
+# Valeurs par défaut initiales (sauvegardées pour reset entre templates)
+_DEFAULT_APP_ZONES = {
+    "find_app": (0.10, 0.12, 0.90, 0.33),
+    "create_store_app": (0.05, 0.37, 0.90, 0.33),
+    "create_ai_ugc_app": (0.05, 0.62, 0.90, 0.33),
+    "sales": (0.02, 0.88, 0.96, 0.12),
+}
+_DEFAULT_TEXT_POSITIONS = [
+    (1 - 0.95, 0.02),
+    (0.5, 0.25),
+    (0.95, 0.54),
+    (0.4, 0.89),
+]
+_DEFAULT_TEXT_ALIGN = ["left", "center", "right", "center"]
+_DEFAULT_FONT_SIZE_RATIO = 0.03
+
+
+def _reset_layout_defaults() -> None:
+    """Remet les globales layout à leurs valeurs par défaut (avant d'appliquer un layout spécifique)."""
+    global APP_ZONES, TEXT_POSITIONS, TEXT_ALIGN, FONT_SIZE_RATIO
+    APP_ZONES = dict(_DEFAULT_APP_ZONES)
+    TEXT_POSITIONS = list(_DEFAULT_TEXT_POSITIONS)
+    TEXT_ALIGN = list(_DEFAULT_TEXT_ALIGN)
+    FONT_SIZE_RATIO = _DEFAULT_FONT_SIZE_RATIO
 
 # -----------------------------------------------------------------------------
 # Limit for testing (number of variations). Set to None to generate all.
@@ -719,10 +768,8 @@ def main(args):
         skip_videos = True
 
     total = 0
-    # Génération basée sur échantillonnage aléatoire des textes (plutôt que toutes les combinaisons)
     max_variations = MAX_VARIATIONS if MAX_VARIATIONS is not None else 4
     for idx in range(max_variations):
-        # Step 1 avec pondération: ~80% de chances de prendre un des favoris
         if random.random() < 0.8 and STEP_1_FAVORITES:
             s1 = random.choice(STEP_1_FAVORITES)
         else:
@@ -732,7 +779,10 @@ def main(args):
         s4 = random.choice(STEP_4_OPTIONS)
         lines = (s1, s2, s3, s4)
         total += 1
-        template = templates[idx % len(templates)]
+        tpl_idx = idx % len(templates)
+        template = templates[tpl_idx]
+        load_layout_file(template_paths[tpl_idx])
+        font_size = max(20, int(height * FONT_SIZE_RATIO))
         font = get_title_font(font_size, idx)
         image_name = f"variation_{idx:04d}.png"
         video_name = f"variation_{idx:04d}.mp4"
@@ -741,7 +791,7 @@ def main(args):
 
         img = render_image(template, lines, font, step_images, idx)
         img.save(image_path)
-        print(f"Saved image {total}: {image_name}")
+        print(f"Saved image {total}: {image_name} (template: {template_paths[tpl_idx].name})")
 
         if not args.images_only and not skip_videos:
             ap = (AUDIO_SINGLE if (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else None) or (
@@ -802,21 +852,13 @@ def run_preview_position():
     print("Ouvre cette image pour voir les positions. Ajuste TEXT_POSITIONS et FONT_SIZE_RATIO dans generate.py puis relance --preview-position pour revérifier.")
 
 
-def run_preview_live():
+def run_preview_live(template_num: int | None = None):
     """
-    Boucle de preview "temps réel" pour ajuster TEXT_POSITIONS, FONT_SIZE_RATIO et APP_ZONES.
+    Boucle de preview "temps réel" pour ajuster les layouts.
 
-    - Génére output/images/preview_live.png avec:
-        * les lignes et labels des titres (comme run_preview_position)
-        * des rectangles colorés pour les zones de logos (APP_ZONES)
-    - Ne s'arrête pas tant que tu n'as pas tapé 'q' puis Entrée.
-
-    Workflow:
-      1) Lancer: python generate.py --preview-live
-      2) Ouvrir preview_live.png dans un viewer (il se mettra à jour à chaque sauvegarde).
-      3) Modifier TEXT_POSITIONS, FONT_SIZE_RATIO, APP_ZONES en haut de generate.py.
-      4) Revenir dans le terminal et appuyer sur Entrée pour regénérer l'image.
-      5) Quand c'est bon, taper 'q' puis Entrée pour quitter.
+    Usage:
+      python generate.py --preview-live                   # preview template1 + layout.json
+      python generate.py --preview-live --template 5      # preview template5 + layout5.json
     """
     template_paths = get_template_paths()
     if not template_paths:
@@ -824,17 +866,25 @@ def run_preview_live():
         return
     OUTPUT_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Mode preview live.")
+    if template_num is not None:
+        tpl_path = PROJECT_ROOT / f"template{template_num}.png"
+        if not tpl_path.exists():
+            print(f"template{template_num}.png not found. Available: {[p.name for p in template_paths]}")
+            return
+        chosen_path = tpl_path
+    else:
+        chosen_path = template_paths[0]
+
+    layout_file = PROJECT_ROOT / f"layout{template_num}.json" if template_num else PROJECT_ROOT / "layout.json"
+    print(f"Mode preview live — template: {chosen_path.name}, layout: {layout_file.name if layout_file.exists() else 'layout.json (default)'}")
     print("  - Ouvre output/images/preview_live.png dans un viewer.")
-    print("  - Modifie layout.json (text_positions, font_size_ratio, app_centers/app_zones).")
+    print(f"  - Modifie {layout_file.name} (text_positions, font_size_ratio, app_centers/app_zones).")
     print("  - Puis appuie sur Entrée ici pour regénérer (q + Entrée pour quitter).")
 
     while True:
-        # Recharger le layout à CHAQUE boucle pour prendre en compte les changements dans layout.json
-        load_layout_file()
+        load_layout_file(chosen_path)
 
-        # Charger un template
-        base = Image.open(template_paths[0]).convert("RGB")
+        base = Image.open(chosen_path).convert("RGB")
         w, h = base.size
 
         # Charger les logos (si présents)
@@ -1218,13 +1268,14 @@ if __name__ == "__main__":
     parser.add_argument("--videos-only", action="store_true", help="Only convert existing images to videos (no new images).")
     parser.add_argument("--preview-position", action="store_true", help="Generate preview_positions.png to see text positions (grille + coordonnées).")
     parser.add_argument("--preview-live", action="store_true", help="Live preview: regenerate preview_live.png in a loop while you tweak TEXT_POSITIONS / APP_ZONES.")
+    parser.add_argument("--template", type=int, default=None, help="Template number for --preview-live (ex: --template 5 pour template5.png + layout5.json)")
     parser.add_argument("--captions", action="store_true", help="Generate 9:16 caption videos (fond noir, bandeau blanc, texte type Best Dropshipping app for 2026).")
     args = parser.parse_args()
 
     if args.preview_position:
         run_preview_position()
     elif args.preview_live:
-        run_preview_live()
+        run_preview_live(template_num=args.template)
     elif args.captions:
         run_captions(args)
     elif args.videos_only:
