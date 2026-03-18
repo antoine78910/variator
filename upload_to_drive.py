@@ -1,25 +1,25 @@
 """
-Upload caption videos to a shared Google Drive folder using a service account.
+Upload caption videos to Google Drive using OAuth2 (user credentials).
 
 Usage:
     python upload_to_drive.py                          # upload today's captions
     python upload_to_drive.py --folder-id XXXXX        # override target folder
-    python upload_to_drive.py --service-account key.json
 
 Environment variables (used by GitHub Actions):
     GDRIVE_FOLDER_ID       — ID of the shared Google Drive folder
-    GDRIVE_SERVICE_ACCOUNT — path to service account JSON key file (or inline JSON)
+    GDRIVE_CLIENT_ID       — OAuth2 client ID
+    GDRIVE_CLIENT_SECRET   — OAuth2 client secret
+    GDRIVE_REFRESH_TOKEN   — OAuth2 refresh token (obtained via auth_drive.py)
 """
 
 import argparse
-import json
 import os
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -27,18 +27,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 CAPTION_VIDEOS_DIR = PROJECT_ROOT / "output" / "caption" / "videos"
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
-def get_credentials(sa_path_or_json: str):
-    """Load service account credentials from a file path or inline JSON string."""
-    if os.path.isfile(sa_path_or_json):
-        return service_account.Credentials.from_service_account_file(sa_path_or_json, scopes=SCOPES)
-    try:
-        info = json.loads(sa_path_or_json)
-        return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    raise ValueError(f"Cannot load service account from: {sa_path_or_json[:80]}...")
+def get_credentials(client_id: str, client_secret: str, refresh_token: str) -> Credentials:
+    """Build OAuth2 credentials from client ID/secret and refresh token."""
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_uri=TOKEN_URI,
+        scopes=SCOPES,
+    )
+    creds.refresh(Request())
+    return creds
 
 
 def find_or_create_subfolder(service, parent_id: str, name: str) -> str:
@@ -68,9 +71,9 @@ def upload_file(service, folder_id: str, file_path: Path) -> str:
     return uploaded["id"]
 
 
-def upload_captions(folder_id: str, sa_path_or_json: str) -> int:
+def upload_captions(folder_id: str, client_id: str, client_secret: str, refresh_token: str) -> int:
     """Upload all caption .mp4 files to Drive/folder_id/YYYY-MM-DD/. Returns count."""
-    creds = get_credentials(sa_path_or_json)
+    creds = get_credentials(client_id, client_secret, refresh_token)
     service = build("drive", "v3", credentials=creds)
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -96,19 +99,20 @@ def upload_captions(folder_id: str, sa_path_or_json: str) -> int:
 def main():
     parser = argparse.ArgumentParser(description="Upload caption videos to Google Drive")
     parser.add_argument("--folder-id", default=os.environ.get("GDRIVE_FOLDER_ID", ""), help="Google Drive folder ID")
-    parser.add_argument(
-        "--service-account",
-        default=os.environ.get("GDRIVE_SERVICE_ACCOUNT", "service_account.json"),
-        help="Path to service account JSON or inline JSON",
-    )
+    parser.add_argument("--client-id", default=os.environ.get("GDRIVE_CLIENT_ID", ""), help="OAuth2 client ID")
+    parser.add_argument("--client-secret", default=os.environ.get("GDRIVE_CLIENT_SECRET", ""), help="OAuth2 client secret")
+    parser.add_argument("--refresh-token", default=os.environ.get("GDRIVE_REFRESH_TOKEN", ""), help="OAuth2 refresh token")
     args = parser.parse_args()
 
     if not args.folder_id:
         print("ERROR: No Drive folder ID. Set GDRIVE_FOLDER_ID env var or pass --folder-id.")
         sys.exit(1)
+    if not args.client_id or not args.client_secret or not args.refresh_token:
+        print("ERROR: Missing OAuth2 credentials. Set GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN.")
+        sys.exit(1)
 
     print(f"Uploading captions to Drive folder {args.folder_id}...")
-    count = upload_captions(args.folder_id, args.service_account)
+    count = upload_captions(args.folder_id, args.client_id, args.client_secret, args.refresh_token)
     print(f"Done. Uploaded {count} files.")
 
 

@@ -144,7 +144,7 @@ STEP_4_CAR_TEMPLATES = [
 STEP_1_OPTIONS_SUFFIX = [
     "Find your winner on",
     "Find a winning product on",
-    "Get your Winning Product on",
+    "Get your Winner on",
     "Find Your Winner with",
     "Find a viral product on",
     "Find Your Next Winner on",
@@ -152,7 +152,7 @@ STEP_1_OPTIONS_SUFFIX = [
 
 STEP_1_FAVORITES_SUFFIX = [
     "Find your winner on",
-    "Get your Winning Product on",
+    "Get your Winner on",
     "Find a winning product on",
 ]
 
@@ -169,7 +169,7 @@ STEP_3_OPTIONS_SUFFIX = [
     "Generate your AI UGC with",
     "Create AI UGC Ads with",
     "Generate AI Creators with",
-    "Create AI Influencer Content with",
+    "Create AI Content with",
 ]
 
 STEP_4_OPTIONS_SUFFIX = [
@@ -1236,11 +1236,10 @@ def render_caption_image(text: str, font: ImageFont.FreeTypeFont | ImageFont.Ima
     # Si icône voiture, réserver un espace en bas du bandeau
     car_h = 0
     if car_icon is not None:
-        # Hauteur max de l'icône: ~40% du bandeau
-        max_car_h = int(band_height * 0.4)
+        max_car_h = int(band_height * 0.60)
         cw, ch = car_icon.size
         if ch > 0 and cw > 0:
-            scale = min(max_car_h / ch, (CAPTION_WIDTH * 0.4) / cw)
+            scale = min(max_car_h / ch, (CAPTION_WIDTH * 0.55) / cw)
             if scale > 0:
                 nw = int(cw * scale)
                 nh = int(ch * scale)

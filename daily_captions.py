@@ -3,7 +3,7 @@ Daily caption generator: generates 3 caption videos and uploads to Google Drive.
 
 Local:   python daily_captions.py                  (copies to Google Drive Desktop folder)
 Server:  python daily_captions.py --server          (uploads via Google Drive API)
-         Requires GDRIVE_FOLDER_ID and GDRIVE_SERVICE_ACCOUNT env vars.
+         Requires GDRIVE_FOLDER_ID, GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN env vars.
 
 Configuration (edit below):
   DAILY_COUNT — number of captions per day (default 3)
@@ -75,13 +75,15 @@ def upload_to_drive_api() -> int:
     """Upload via Google Drive API (for server / GitHub Actions)."""
     import os
     folder_id = os.environ.get("GDRIVE_FOLDER_ID", "")
-    sa_path = os.environ.get("GDRIVE_SERVICE_ACCOUNT", "")
-    if not folder_id or not sa_path:
-        log("GDRIVE_FOLDER_ID or GDRIVE_SERVICE_ACCOUNT not set. Skipping Drive upload.")
+    client_id = os.environ.get("GDRIVE_CLIENT_ID", "")
+    client_secret = os.environ.get("GDRIVE_CLIENT_SECRET", "")
+    refresh_token = os.environ.get("GDRIVE_REFRESH_TOKEN", "")
+    if not folder_id or not client_id or not client_secret or not refresh_token:
+        log("Missing GDRIVE_FOLDER_ID / GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN. Skipping Drive upload.")
         return 0
     try:
         from upload_to_drive import upload_captions
-        count = upload_captions(folder_id, sa_path)
+        count = upload_captions(folder_id, client_id, client_secret, refresh_token)
         return count
     except Exception as e:
         log(f"Drive API upload failed: {e}")
