@@ -57,7 +57,7 @@ APP_ZONES = {
 STEP_1_OPTIONS = [
     "Find a winning product",
     "Find your winner",
-    "Discover a viral product",
+    "Find a viral product",
     "Find Your Winning Product",
     "Find Your Next Winner",
     "Find a Winning Product Fast",
@@ -146,7 +146,7 @@ STEP_1_OPTIONS_SUFFIX = [
     "Find a winning product on",
     "Get your Winning Product on",
     "Find Your Winner with",
-    "Discover a viral product on",
+    "Find a viral product on",
     "Find Your Next Winner on",
 ]
 
@@ -599,7 +599,10 @@ def render_image(
     step_images: dict[str, Image.Image] | None,
     variation_index: int,
 ) -> Image.Image:
-    """Draw step images (if present) and the four text lines on a copy of the template."""
+    """Draw step images (if present) and the four text lines on a copy of the template.
+
+    IMPORTANT: TEXT_POSITIONS are interpreted as the TOP-LEFT corner (start) of the title text.
+    """
     img = template.copy()
     if step_images:
         paste_step_images(img, step_images, variation_index)
@@ -610,16 +613,9 @@ def render_image(
             break
         title = f"{i + 1}. {line}"
         x_frac, y_frac = TEXT_POSITIONS[i]
-        align = TEXT_ALIGN[i] if i < len(TEXT_ALIGN) else "center"
-        bbox = draw.textbbox((0, 0), title, font=font)
-        tw = bbox[2] - bbox[0]
+        # Positions are the start of the phrase (top-left corner)
+        x = int(w * x_frac)
         y = int(h * y_frac)
-        if align == "left":
-            x = int(w * x_frac)
-        elif align == "right":
-            x = int(w * x_frac) - tw
-        else:
-            x = int(w * x_frac) - tw // 2
         for dx in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
             for dy in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
                 if dx != 0 or dy != 0:
