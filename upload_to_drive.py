@@ -72,12 +72,9 @@ def upload_file(service, folder_id: str, file_path: Path) -> str:
 
 
 def upload_captions(folder_id: str, client_id: str, client_secret: str, refresh_token: str) -> int:
-    """Upload all caption .mp4 files to Drive/folder_id/YYYY-MM-DD/. Returns count."""
+    """Upload all caption .mp4 files directly to the given Drive folder. Returns count."""
     creds = get_credentials(client_id, client_secret, refresh_token)
     service = build("drive", "v3", credentials=creds)
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    day_folder_id = find_or_create_subfolder(service, folder_id, today)
 
     videos = sorted(CAPTION_VIDEOS_DIR.glob("caption_*.mp4"))
     if not videos:
@@ -87,7 +84,7 @@ def upload_captions(folder_id: str, client_id: str, client_secret: str, refresh_
     uploaded = 0
     for v in videos:
         try:
-            fid = upload_file(service, day_folder_id, v)
+            fid = upload_file(service, folder_id, v)
             print(f"  Uploaded {v.name} -> Drive (id={fid})")
             uploaded += 1
         except Exception as e:
