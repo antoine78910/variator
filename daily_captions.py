@@ -48,23 +48,24 @@ def find_drive_folder() -> Path | None:
 
 
 def copy_to_drive_local(drive_folder: Path) -> int:
+    from upload_to_drive import pick_drive_filenames
+
     caption_videos = PROJECT_ROOT / "output" / "caption" / "videos"
     if not caption_videos.exists():
         log("No caption videos directory found.")
         return 0
-    today = datetime.now().strftime("%Y-%m-%d")
-    dest = drive_folder / today
-    dest.mkdir(parents=True, exist_ok=True)
+    drive_folder.mkdir(parents=True, exist_ok=True)
     videos = sorted(caption_videos.glob("caption_*.mp4"))
     if not videos:
         log("No caption .mp4 files found to copy.")
         return 0
+    names = pick_drive_filenames(len(videos))
     copied = 0
-    for v in videos:
-        target = dest / v.name
+    for v, name in zip(videos, names):
+        target = drive_folder / name
         try:
             shutil.copy2(v, target)
-            log(f"  Copied {v.name} -> {target}")
+            log(f"  Copied {v.name} -> {target.name}")
             copied += 1
         except Exception as e:
             log(f"  Failed to copy {v.name}: {e}")

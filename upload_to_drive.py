@@ -14,8 +14,9 @@ Environment variables (used by GitHub Actions):
 
 import argparse
 import os
+import random
+import re
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -28,6 +29,70 @@ CAPTION_VIDEOS_DIR = PROJECT_ROOT / "output" / "caption" / "videos"
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+# Titres affichés comme nom de fichier sur Google Drive (un tirage au sort par vidéo)
+DRIVE_CTA_TITLES = [
+    'Follow & comment "W" to receive the full guide',
+    'Follow + comment "AI" to unlock the full guide',
+    'Follow and drop "W" for the full guide',
+    'Follow & type "AI" to get access to the full guide',
+    'Follow and comment "W" to unlock everything',
+    'Follow + comment "AI" for instant access to the guide',
+    'Follow and reply "W" to get the full guide',
+    'Follow & comment "AI" to receive the guide',
+    'Follow and drop "AI" below to unlock the full guide',
+    'Follow & comment "W" to access the full guide',
+    'Follow and type "AI" to get everything',
+    'Follow + comment "W" for the complete guide',
+    'Follow and comment "AI" to unlock the full guide',
+    'Follow & drop "W" to get full access to the guide',
+    'Follow and comment "AI" to receive the full guide-access',
+    'Follow + comment "W" to get the full breakdown',
+    'Follow and type "AI" below for the full guide',
+    'Follow & comment "W" to unlock the method',
+    'Follow and drop "AI" for full access',
+    'Follow + comment "W" to get everything unlocked',
+]
+
+
+def sanitize_drive_filename(cta: str, max_len: int = 180) -> str:
+    """Transforme une phrase CTA en nom de fichier .mp4 valide pour Drive / OS."""
+    s = cta.strip()
+    s = s.replace('"', "")  # guillemets retirés pour le nom de fichier
+    for ch in r'\/:*?<>|':
+        s = s.replace(ch, "")
+    s = s.replace("&", " and ")
+    s = re.sub(r"\s+", " ", s).strip()
+    s = s.replace(" ", "_")
+    if len(s) > max_len:
+        s = s[:max_len].rstrip("_")
+    if not s.lower().endswith(".mp4"):
+        s = f"{s}.mp4"
+    return s
+
+
+def pick_drive_filenames(n: int) -> list[str]:
+    """Choisit n titres distincts (tirage aléatoire) et les convertit en noms .mp4 uniques."""
+    if n <= 0:
+        return []
+    pool = list(DRIVE_CTA_TITLES)
+    if n <= len(pool):
+        chosen = random.sample(pool, n)
+    else:
+        chosen = random.choices(pool, k=n)
+    names: list[str] = []
+    used_lower: set[str] = set()
+    for cta in chosen:
+        base = sanitize_drive_filename(cta)
+        name = base
+        i = 2
+        while name.lower() in used_lower:
+            stem = base[:-4] if base.lower().endswith(".mp4") else base
+            name = f"{stem}_{i}.mp4"
+            i += 1
+        used_lower.add(name.lower())
+        names.append(name)
+    return names
 
 
 def get_credentials(client_id: str, client_secret: str, refresh_token: str) -> Credentials:
@@ -44,28 +109,10 @@ def get_credentials(client_id: str, client_secret: str, refresh_token: str) -> C
     return creds
 
 
-def find_or_create_subfolder(service, parent_id: str, name: str) -> str:
-    """Find or create a subfolder inside parent_id. Returns the folder ID."""
-    query = (
-        f"'{parent_id}' in parents and name = '{name}' "
-        f"and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    )
-    results = service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
-    files = results.get("files", [])
-    if files:
-        return files[0]["id"]
-    metadata = {
-        "name": name,
-        "mimeType": "application/vnd.google-apps.folder",
-        "parents": [parent_id],
-    }
-    folder = service.files().create(body=metadata, fields="id").execute()
-    return folder["id"]
-
-
-def upload_file(service, folder_id: str, file_path: Path) -> str:
+def upload_file(service, folder_id: str, file_path: Path, drive_filename: str | None = None) -> str:
     """Upload a single file to the given Drive folder. Returns the file ID."""
-    metadata = {"name": file_path.name, "parents": [folder_id]}
+    name = drive_filename if drive_filename else file_path.name
+    metadata = {"name": name, "parents": [folder_id]}
     media = MediaFileUpload(str(file_path), resumable=True)
     uploaded = service.files().create(body=metadata, media_body=media, fields="id, name").execute()
     return uploaded["id"]
@@ -81,11 +128,12 @@ def upload_captions(folder_id: str, client_id: str, client_secret: str, refresh_
         print("No caption videos found to upload.")
         return 0
 
+    drive_names = pick_drive_filenames(len(videos))
     uploaded = 0
-    for v in videos:
+    for v, drive_name in zip(videos, drive_names):
         try:
-            fid = upload_file(service, folder_id, v)
-            print(f"  Uploaded {v.name} -> Drive (id={fid})")
+            fid = upload_file(service, folder_id, v, drive_filename=drive_name)
+            print(f"  Uploaded {v.name} -> Drive as {drive_name!r} (id={fid})")
             uploaded += 1
         except Exception as e:
             print(f"  Failed to upload {v.name}: {e}")
