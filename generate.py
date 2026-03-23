@@ -844,11 +844,17 @@ def main(args):
         print("Add template1.png, template2.png, ... in the project root.")
         return
 
-    # Preload all templates (same size assumed) for quick access
+    # Preload all templates for quick access
     templates = [Image.open(p).convert("RGB") for p in template_paths]
     width, height = templates[0].size
-    font_size = max(20, int(height * FONT_SIZE_RATIO))
     print(f"Loaded {len(templates)} templates: {[p.name for p in template_paths]}")
+
+    distinct_sizes = {t.size for t in templates}
+    if len(distinct_sizes) > 1:
+        print(
+            "Note: les templates n'ont pas tous la même taille — la police est calculée "
+            f"par template (comme en --preview-live). Tailles: {[f'{p.name}:{t.size[0]}x{t.size[1]}' for p, t in zip(template_paths, templates)]}"
+        )
 
     step_images = load_step_images(width, height)
     if step_images:
@@ -879,7 +885,9 @@ def main(args):
         load_layout_file(template_paths[tpl_idx])
         lines = _pick_step_texts(template_paths[tpl_idx])
         total += 1
-        font_size = max(20, int(height * FONT_SIZE_RATIO))
+        tw, th = template.size
+        # Même logique que run_preview_live : la taille de police suit la hauteur DU template courant
+        font_size = max(20, int(th * FONT_SIZE_RATIO))
         font = get_title_font(font_size, idx)
         image_name = f"variation_{idx:04d}.png"
         video_name = f"variation_{idx:04d}.mp4"
@@ -894,7 +902,7 @@ def main(args):
             ap = (AUDIO_SINGLE if (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else None) or (
                 audio_list[idx % len(audio_list)] if audio_list else None
             )
-            if image_to_video(image_path, video_path, width, height, ap):
+            if image_to_video(image_path, video_path, tw, th, ap):
                 print(f"  -> video: {video_name}")
             else:
                 print(f"  -> video failed: {video_name}")
