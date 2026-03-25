@@ -56,16 +56,15 @@ DRIVE_CTA_TITLES = [
 
 
 def sanitize_drive_filename(cta: str, max_len: int = 180) -> str:
-    """Transforme une phrase CTA en nom de fichier .mp4 valide pour Drive / OS."""
+    """Transforme une phrase CTA en nom de fichier .mp4 valide pour Drive (espaces conservés)."""
     s = cta.strip()
     s = s.replace('"', "")  # guillemets retirés pour le nom de fichier
     for ch in r'\/:*?<>|':
         s = s.replace(ch, "")
     s = s.replace("&", " and ")
     s = re.sub(r"\s+", " ", s).strip()
-    s = s.replace(" ", "_")
     if len(s) > max_len:
-        s = s[:max_len].rstrip("_")
+        s = s[:max_len].rstrip()
     if not s.lower().endswith(".mp4"):
         s = f"{s}.mp4"
     return s
@@ -88,7 +87,7 @@ def pick_drive_filenames(n: int) -> list[str]:
         i = 2
         while name.lower() in used_lower:
             stem = base[:-4] if base.lower().endswith(".mp4") else base
-            name = f"{stem}_{i}.mp4"
+            name = f"{stem} ({i}).mp4"
             i += 1
         used_lower.add(name.lower())
         names.append(name)
