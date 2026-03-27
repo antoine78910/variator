@@ -135,8 +135,18 @@ def main():
 
     if cli_args.server:
         log("Server mode: uploading via Google Drive API...")
+        cap_videos = PROJECT_ROOT / "output" / "caption" / "videos"
+        has_videos = cap_videos.exists() and any(cap_videos.glob("caption_*.mp4"))
         count = upload_to_drive_api()
         log(f"Uploaded {count} caption videos to Google Drive.")
+        if has_videos and count == 0:
+            log(
+                "ERROR: 0 files uploaded but caption videos exist. "
+                "Typical fix: refresh token expired — run locally: "
+                "python auth_drive.py --client-id ... --client-secret ... "
+                "then set GitHub secret GDRIVE_REFRESH_TOKEN to the new token."
+            )
+            sys.exit(1)
     else:
         drive_folder = find_drive_folder()
         if drive_folder:
