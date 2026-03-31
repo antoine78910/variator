@@ -1,4 +1,4 @@
-Shopify results — 2 images
-==========================
-Place ici 2 images (ex: sales1.png, sales2.png).
-Le script alterne entre les deux par variation.
+Shopify results — plusieurs images
+==================================
+Place ici tes captures (png, jpg, webp). Tu peux utiliser des sous-dossiers.
+Chaque variation choisit une image au hasard parmi tout le dossier.

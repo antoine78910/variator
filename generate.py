@@ -5,8 +5,8 @@ by combining step images, text, and exporting as images, then converting to vide
 Where to put your files:
 - template1.png … template4.png  → project root. One template is chosen per variation (rotation).
 - Step images   → assets/ folder (see ASSETS_IMAGES below).
-- Polices → lancer une fois : python download_fonts.py (télécharge Rubik, Montserrat, Poppins dans fonts/).
-- Audio (optional) → add files in audio_path/ (one per variation) or set AUDIO_SINGLE.
+- Polices → idéalement python download_fonts.py (Rubik, Montserrat, Poppins dans fonts/). Sinon tirage aléatoire parmi les .ttf du dossier ou des polices Windows courantes (souvent en gras).
+- Audio (optional) → audio_path/ (all tracks used in random order each run) or set AUDIO_SINGLE for one fixed file.
 """
 
 import argparse
@@ -31,17 +31,23 @@ FONTS_DIR = PROJECT_ROOT / "fonts"
 OUTPUT_IMAGES_DIR = PROJECT_ROOT / "output" / "images"
 OUTPUT_VIDEOS_DIR = PROJECT_ROOT / "output" / "videos"
 
-# Audio: dossier contenant les sons (un fichier différent par variation). Extensions: .mp3, .wav, .m4a.
+# Audio: tous les fichiers du dossier sont utilisés ; ordre mélangé à chaque exécution (variation i → i-ème du mélange). .mp3, .wav, .m4a.
 AUDIO_DIR = PROJECT_ROOT / "audio_path"
 # Si tu veux un seul fichier fixe, mets par ex. AUDIO_SINGLE = AUDIO_DIR / "ReelAudio-53910.mp3", sinon None.
 AUDIO_SINGLE = None
 
-# App images: on utilise les dossiers find_app, create_store_app, create_ai_ugc_app (pas all-in-one).
-# Mettre True pour utiliser une seule image allinoneapp pour les 3 slots app.
+# App images: find_app, create_store_app, create_ai_ugc_app + assets/allinoneapp (même visuel sur les 3 zones quand le mélange l’active).
+# True = toujours l’image allinoneapp sur les 3 emplacements app (ignore le mélange).
+# False = logos séparés + option all-in-one : voir ALLINONE_MIX_FRACTION.
 USE_ALLINONEAPP = False
+# Si USE_ALLINONEAPP est False et que allinoneapp + dossiers séparés existent : part des variations en mode « une image partout ».
+ALLINONE_MIX_FRACTION = 0.25
 APP_FOLDERS = ["find_app", "create_store_app", "create_ai_ugc_app"]
 ALLINONEAPP_FOLDER = "allinoneapp"
 SALES_FOLDER = "sales"
+
+# Mode logos séparés : le slot create_ai_ugc_app tire au hasard parmi ces fichiers (chemins à l’usage, pas préchargés).
+CREATE_AI_UGC_LOGO_FILENAMES = frozenset({"4.png", "8.png", "9.png"})
 
 # Zones: (x_frac_left, y_frac_top, w_frac, h_frac). Logos ~3× plus grands (tous les assets). Ajuster si chevauchement.
 APP_ZONES = {
@@ -125,13 +131,21 @@ STEP_4_OPTIONS = [
     "Make Sh*t Ton of Money",
 ]
 
-# Car brands for dynamic step4 text (used when caption mentions a car)
-CAR_BRANDS_DISPLAY = {
-    "bmw": "BMW", "audi": "Audi", "kawasaki": "Kawasaki",
-    "lambo": "Lamborghini", "lamborghini": "Lamborghini",
-    "ferrari": "Ferrari", "porsche": "Porsche", "tesla": "Tesla",
-    "mclaren": "McLaren",
-}
+# Marques voiture : (mot-clé dans le texte, nom affiché, préfixe des fichiers dans assets/cars).
+# Ordre important : mettre « lamborghini » avant « lambo » pour les textes qui contiennent le mot entier ;
+# pour les fichiers, seul le préfixe compte (lambo.png n’existe pas → préfixe « lamborghini »).
+CAR_BRAND_SPECS: list[tuple[str, str, str]] = [
+    ("lamborghini", "Lamborghini", "lamborghini"),
+    ("mercedes", "Mercedes", "mercedes"),
+    ("mclaren", "McLaren", "mclaren"),
+    ("porsche", "Porsche", "porsche"),
+    ("ferrari", "Ferrari", "ferrari"),
+    ("kawasaki", "Kawasaki", "kawasaki"),
+    ("tesla", "Tesla", "tesla"),
+    ("audi", "Audi", "audi"),
+    ("bmw", "BMW", "bmw"),
+    ("lambo", "Lamborghini", "lamborghini"),
+]
 
 STEP_4_CAR_TEMPLATES = [
     "Get your {car}",
@@ -202,7 +216,7 @@ OUTLINE_WIDTH = 2
 # Grille 10×10 (labels 0.1 à 1.0) sur les images générées pour positionnement précis. Mettre False pour désactiver.
 ENABLE_GRID_OVERLAY = True
 
-# 3 polices pour les titres (rotation par variation : 0→1, 1→2, 2→3, 3→1…). À mettre dans fonts/ ou Windows/Fonts.
+# Fallback si aucun .ttf/.otf dans fonts/ : ces noms sont cherchés dans fonts/, Windows/Fonts, etc.
 TITLE_FONTS = ["Rubik-Bold.ttf", "Montserrat-Bold.ttf", "Poppins-Bold.ttf"]
 
 
@@ -375,7 +389,7 @@ def _pick_step_texts(template_path: Path, caption_text: str | None = None) -> tu
     # Dynamic car-based step4: if a caption mentions a car brand, sometimes use a car phrase
     if caption_text and random.random() < 0.4:
         lower = caption_text.lower()
-        for key, display in CAR_BRANDS_DISPLAY.items():
+        for key, display, _prefix in CAR_BRAND_SPECS:
             if key in lower:
                 tpl = random.choice(STEP_4_CAR_TEMPLATES)
                 s4 = tpl.format(car=display)
@@ -416,19 +430,93 @@ CAPTION_RECT_Y_START = 0.056   # fraction hauteur (bandeau un peu plus haut)
 CAPTION_RECT_Y_END = 0.163
 CAPTION_TEXT_COLOR = (0, 0, 0)
 CAPTION_HIGHLIGHT_COLOR = (255, 0, 0)
-CAPTION_HIGHLIGHT_WORDS = ["2026", "strategy", "Strategy"]
+CAPTION_HIGHLIGHT_WORDS = ["2026", "strategy", "Strategy", "Mercedes", "Lamborghini"]
 # Nombre max de vidéos 9:16 à générer par run (prises au hasard dans captions.txt)
 CAPTION_MAX_COUNT = 4
 CAPTION_OPTIONS = [
     "Best Dropshipping app for 2026",
     "Best dropshipping strategy for 2026",
+    "Mercedes-level dropshipping wins in 2026",
+    "Scale to a Lamborghini with this dropshipping app",
 ]
 OUTPUT_CAPTION_IMAGES = PROJECT_ROOT / "output" / "caption" / "images"
 OUTPUT_CAPTION_VIDEOS = PROJECT_ROOT / "output" / "caption" / "videos"
 
+_FONT_EXTS = frozenset({".ttf", ".otf", ".ttc"})
+
+
+def _font_pool_from_project() -> list[str]:
+    """Tous les fichiers police sous fonts/ (récursif), chemins absolus."""
+    if not FONTS_DIR.is_dir():
+        return []
+    out: list[str] = []
+    for p in FONTS_DIR.rglob("*"):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in _FONT_EXTS:
+            continue
+        if p.name.upper().startswith("README"):
+            continue
+        out.append(str(p.resolve()))
+    return out
+
+
+# Si fonts/ est vide : ces noms sous Windows/Fonts sont essayés pour le hasard (évite Rubik seul).
+_WINDOWS_FONT_FALLBACK_NAMES = (
+    "arialbd.ttf",
+    "calibrib.ttf",
+    "segoeuib.ttf",
+    "verdanab.ttf",
+    "georgiab.ttf",
+    "framd.ttf",
+    "impact.ttf",
+    "palab.ttf",
+    "corbelb.ttf",
+    "taileb.ttf",
+)
+
+
+def _font_pool_for_random() -> list[str]:
+    """Polices disponibles pour un tirage aléatoire : fonts/ d’abord, sinon Windows/Fonts (+ fallback)."""
+    pool = _font_pool_from_project()
+    if pool:
+        return pool
+    win = Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"
+    if not win.is_dir():
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in tuple(TITLE_FONTS) + _WINDOWS_FONT_FALLBACK_NAMES:
+        p = win / n
+        if p.is_file():
+            s = str(p.resolve())
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+    return out
+
+
+def _try_random_from_pool(
+    size: int, pool: list[str]
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont | None:
+    """Essaie plusieurs fichiers au hasard jusqu’à ce qu’un se charge (fichiers corrompus / formats bizarres)."""
+    if not pool:
+        return None
+    order = list(pool)
+    random.shuffle(order)
+    for path in order[: min(12, len(order))]:
+        try:
+            return ImageFont.truetype(path, size)
+        except (OSError, IOError):
+            continue
+    return None
+
 
 def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load Rubik Bold first, then fallbacks (pour captions, grille, etc.)."""
+    """Police au hasard dans fonts/ ou Windows/Fonts si possible, sinon Rubik/Arial/dégradés."""
+    f = _try_random_from_pool(size, _font_pool_for_random())
+    if f is not None:
+        return f
     candidates = [
         str(FONTS_DIR / "Rubik-Bold.ttf"),
         "Rubik-Bold.ttf",
@@ -448,8 +536,10 @@ def get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def get_title_font(size: int, variation_index: int = 0) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Charge une des 3 polices titres, choisie au hasard pour chaque variation."""
-    # Choix aléatoire dans la liste, pour ne pas avoir toujours Rubik.
+    """Police titre : au hasard dans fonts/ ou Windows/Fonts, sinon TITLE_FONTS + dégradés (variation_index ignoré)."""
+    f = _try_random_from_pool(size, _font_pool_for_random())
+    if f is not None:
+        return f
     name = random.choice(TITLE_FONTS)
     win_fonts = Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts"
     candidates = [
@@ -495,11 +585,19 @@ def get_all_text_combinations():
     )
 
 
-def _load_images_from_folder(folder: Path, keep_alpha: bool = False) -> list[Image.Image]:
+def _load_images_from_folder(
+    folder: Path,
+    keep_alpha: bool = False,
+    *,
+    allowed_names: frozenset[str] | None = None,
+) -> list[Image.Image]:
     """Load all PNG/JPG from a folder. keep_alpha=True preserves transparency (RGBA) for logos."""
+    allowed_l = {n.lower() for n in allowed_names} if allowed_names else None
     out = []
     for ext in ("*.png", "*.jpg", "*.jpeg"):
         for p in sorted(folder.glob(ext)):
+            if allowed_l is not None and p.name.lower() not in allowed_l:
+                continue
             try:
                 im = Image.open(p)
                 if keep_alpha and im.mode in ("RGBA", "LA", "P"):
@@ -512,64 +610,124 @@ def _load_images_from_folder(folder: Path, keep_alpha: bool = False) -> list[Ima
     return out
 
 
+# extensions image pour le slot sales (sous-dossiers inclus)
+_SALES_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+def _collect_sales_image_paths(sales_dir: Path) -> list[Path]:
+    """Tous les fichiers image sous sales/ (récursif), ordre mélangé pour tirage équitable."""
+    paths: list[Path] = []
+    for p in sales_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in _SALES_IMAGE_SUFFIXES:
+            continue
+        if p.name.lower().startswith("readme"):
+            continue
+        paths.append(p)
+    random.shuffle(paths)
+    return paths
+
+
+def _open_asset_image(path: Path, keep_alpha: bool) -> Image.Image | None:
+    try:
+        im = Image.open(path)
+        if keep_alpha and im.mode in ("RGBA", "LA", "P"):
+            return im.convert("RGBA")
+        return im.convert("RGB")
+    except Exception:
+        return None
+
+
+def _ugc_logo_paths(folder: Path) -> list[Path]:
+    """Un chemin par fichier autorisé présent sur disque (4.png, 8.png, 9.png) — tirage au collage."""
+    by_lower = {p.name.lower(): p for p in folder.iterdir() if p.is_file()}
+    paths: list[Path] = []
+    for name in sorted(CREATE_AI_UGC_LOGO_FILENAMES):
+        p = by_lower.get(name.lower())
+        if p is not None:
+            paths.append(p)
+    return paths
+
+
 def load_step_images(w: int, h: int) -> dict | None:
-    """Load app images from assets subfolders. Logos en RGBA pour transparence. allinoneapp ignoré si USE_ALLINONEAPP=False."""
+    """Load app images from assets subfolders. Logos en RGBA. allinoneapp est toujours chargé si le dossier existe (même si USE_ALLINONEAPP=False)."""
     out = {}
-    if USE_ALLINONEAPP:
-        allinone = ASSETS_DIR / ALLINONEAPP_FOLDER
-        if allinone.exists():
-            imgs = _load_images_from_folder(allinone, keep_alpha=True)
-            out["allinoneapp"] = imgs[0:1] if imgs else None
-        else:
-            out["allinoneapp"] = None
+    allinone = ASSETS_DIR / ALLINONEAPP_FOLDER
+    if allinone.exists():
+        imgs = _load_images_from_folder(allinone, keep_alpha=True)
+        out["allinoneapp"] = imgs if imgs else []
     else:
-        out["allinoneapp"] = None
+        out["allinoneapp"] = []
     for name in APP_FOLDERS:
         folder = ASSETS_DIR / name
-        out[name] = _load_images_from_folder(folder, keep_alpha=True) if folder.exists() else []
+        if not folder.exists():
+            out[name] = []
+            continue
+        if name == "create_ai_ugc_app":
+            paths = _ugc_logo_paths(folder)
+            # list[Path] → ouverture + random.choice à chaque variation (évite biais / échecs chargement silencieux)
+            out[name] = paths if paths else _load_images_from_folder(folder, keep_alpha=True)
+        else:
+            out[name] = _load_images_from_folder(folder, keep_alpha=True)
     sales_dir = ASSETS_DIR / SALES_FOLDER
-    out["sales"] = _load_images_from_folder(sales_dir, keep_alpha=True) if sales_dir.exists() else []
+    out["sales"] = _collect_sales_image_paths(sales_dir) if sales_dir.exists() else []
     has_allinone = bool(out.get("allinoneapp"))
     has_folders = any(out.get(k) for k in APP_FOLDERS)
-    if not has_allinone and not has_folders:
+    has_sales = bool(out.get("sales"))
+    if not has_allinone and not has_folders and not has_sales:
         return None
     return out
 
 
-def _app_combo_indices(step_images: dict, variation_index: int) -> dict[str, int]:
-    """Indices pour chaque dossier app (find, create_store, create_ai_ugc) pour avoir toutes les combinaisons."""
-    lengths = [len(step_images.get(k) or []) for k in APP_FOLDERS]
-    if not all(lengths):
-        return {APP_FOLDERS[i]: variation_index % max(1, lengths[i]) for i in range(len(APP_FOLDERS))}
-    n_combos = 1
-    for L in lengths:
-        n_combos *= L
-    combo = variation_index % n_combos
-    indices = {}
-    for i, name in enumerate(APP_FOLDERS):
-        indices[name] = combo % lengths[i]
-        combo //= lengths[i]
-    return indices
+def _use_allinone_on_all_app_slots(step_images: dict) -> bool:
+    """True = même logo all-in-one sur find_app, create_store_app, create_ai_ugc (3 zones identiques)."""
+    ao = step_images.get("allinoneapp") or []
+    has_ao = len(ao) > 0
+    has_split = any(step_images.get(k) for k in APP_FOLDERS)
+    if USE_ALLINONEAPP:
+        return has_ao
+    if not has_ao:
+        return False
+    if not has_split:
+        return True
+    return random.random() < ALLINONE_MIX_FRACTION
 
 
-def paste_step_images(img: Image.Image, step_images: dict, variation_index: int) -> None:
-    """Paste app and sales images at APP_ZONES. Combinaisons indépendantes entre les 3 dossiers app. Logos en ratio uniforme."""
+def paste_step_images(
+    img: Image.Image,
+    step_images: dict,
+    variation_index: int,
+    *,
+    allinone_all_slots: bool,
+) -> None:
+    """Paste app and sales images at APP_ZONES. All-in-one (même visuel sur les 3 apps) ou tirage aléatoire par zone."""
     w, h = img.size
-    use_allinone = step_images.get("allinoneapp")
-    combo = _app_combo_indices(step_images, variation_index) if not use_allinone else None
+    allinone_list = step_images.get("allinoneapp") or []
+    use_allinone = allinone_all_slots and len(allinone_list) > 0
+    ao_pick = random.choice(allinone_list) if use_allinone else None
     for slot_name, zone in APP_ZONES.items():
         if slot_name == "sales":
             sales_list = step_images.get("sales") or []
             if not sales_list:
                 continue
-            slot_im = sales_list[variation_index % len(sales_list)]
+            pick = random.choice(sales_list)
+            if isinstance(pick, Path):
+                slot_im = _open_asset_image(pick, keep_alpha=True)
+                if slot_im is None:
+                    continue
+            else:
+                slot_im = pick
         else:
             if use_allinone:
-                slot_im = use_allinone[0] if use_allinone else None
+                slot_im = ao_pick
             else:
                 lst = step_images.get(slot_name) or []
-                idx = combo.get(slot_name, 0) if combo else (variation_index % len(lst) if lst else 0)
-                slot_im = lst[idx % len(lst)] if lst else None
+                if lst and isinstance(lst[0], Path):
+                    pick = random.choice(lst)
+                    slot_im = _open_asset_image(pick, keep_alpha=True)
+                else:
+                    slot_im = random.choice(lst) if lst else None
         if slot_im is None:
             continue
         x_frac, y_frac, w_frac, h_frac = zone
@@ -596,7 +754,7 @@ def render_image(
     template: Image.Image,
     lines: tuple[str, ...],
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    step_images: dict[str, Image.Image] | None,
+    step_images: dict | None,
     variation_index: int,
 ) -> Image.Image:
     """Draw step images (if present) and the four text lines on a copy of the template.
@@ -605,7 +763,8 @@ def render_image(
     """
     img = template.copy()
     if step_images:
-        paste_step_images(img, step_images, variation_index)
+        allinone_all = _use_allinone_on_all_app_slots(step_images)
+        paste_step_images(img, step_images, variation_index, allinone_all_slots=allinone_all)
     draw = ImageDraw.Draw(img)
     w, h = img.size
     for i, line in enumerate(lines):
@@ -868,7 +1027,10 @@ def main(args):
     if AUDIO_SINGLE and AUDIO_SINGLE.exists():
         print(f"Using single audio: {AUDIO_SINGLE}")
     elif audio_list:
-        print(f"Using {len(audio_list)} audio files from {AUDIO_DIR} (one per variation)")
+        print(
+            f"Using {len(audio_list)} audio files from {AUDIO_DIR} "
+            "(random track per variation)"
+        )
     else:
         print("No audio (add files in audio_path/ or set AUDIO_SINGLE in generate.py).")
 
@@ -900,7 +1062,7 @@ def main(args):
 
         if not args.images_only and not skip_videos:
             ap = (AUDIO_SINGLE if (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else None) or (
-                audio_list[idx % len(audio_list)] if audio_list else None
+                random.choice(audio_list) if audio_list else None
             )
             if image_to_video(image_path, video_path, tw, th, ap):
                 print(f"  -> video: {video_name}")
@@ -1002,7 +1164,7 @@ def run_preview_live(template_num: int | None = None):
         # Générer une image avec VRAIS titres + logos
         # On varie l'index pour voir aussi différents logos (pas seulement les titres) en preview.
         preview_idx = random.randint(0, 10_000_000)
-        img = render_image(base, sample_lines, title_font, step_images, variation_index=preview_idx)
+        img = render_image(base, sample_lines, title_font, step_images, preview_idx)
 
         # Grille légère pour repères
         draw_grid_on_image(img)
@@ -1176,35 +1338,67 @@ def _draw_centered_colored_text(
         draw.text((x, y), suffix, font=font, fill=CAPTION_TEXT_COLOR)
 
 
+_CAR_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+def _stem_matches_car_brand(stem_lower: str, prefix_lower: str) -> bool:
+    """audi / audi (2).png / mercedes (3).png → même préfixe de marque."""
+    return stem_lower == prefix_lower or stem_lower.startswith(prefix_lower + " ")
+
+
+def _all_car_file_prefixes() -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for _k, _d, pref in CAR_BRAND_SPECS:
+        pl = pref.lower()
+        if pl not in seen:
+            seen.add(pl)
+            out.append(pl)
+    return sorted(out, key=len, reverse=True)
+
+
+def _car_paths_by_brand_prefix() -> dict[str, list[Path]]:
+    """Index préfixe marque → chemins (audi.png, audi (2).png, …)."""
+    idx: dict[str, list[Path]] = {}
+    cars_dir = ASSETS_DIR / "cars"
+    if not cars_dir.is_dir():
+        return idx
+    brand_prefixes = _all_car_file_prefixes()
+    for p in cars_dir.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in _CAR_IMAGE_SUFFIXES:
+            continue
+        if p.name.lower().startswith("readme"):
+            continue
+        stem_l = p.stem.lower()
+        for pref in brand_prefixes:
+            if _stem_matches_car_brand(stem_l, pref):
+                idx.setdefault(pref, []).append(p)
+                break
+    return idx
+
+
 def _get_car_icon_for_caption(text: str) -> Image.Image | None:
     """
-    Si le texte mentionne une marque (bmw, audi, kawasaki, lambo, ferrari, porsche, tesla, mclaren),
-    charge l'icône depuis assets/cars. Le fond blanc / quasi blanc est rendu transparent.
+    Si le texte mentionne une marque (voir CAR_BRAND_SPECS), charge une icône depuis assets/cars.
+    Plusieurs fichiers par marque (ex. audi.png, audi (2).png) : un tirage au hasard.
+    Le fond blanc / quasi blanc est rendu transparent.
     """
-    cars_map = {
-        "bmw": "bmw.png",
-        "audi": "audi.png",
-        "kawasaki": "kawasaki.png",
-        "lambo": "lambo.png",
-        "lamborghini": "lambo.png",
-        "ferrari": "ferrari.png",
-        "porsche": "porsche.png",
-        "tesla": "tesla.png",
-        "mclaren": "mclaren.png",
-    }
     lower = text.lower()
-    target = None
-    for key, filename in cars_map.items():
-        if key in lower:
-            target = filename
-            break
-    if not target:
-        return None
-    path = ASSETS_DIR / "cars" / target
-    if not path.exists():
+    by_pref = _car_paths_by_brand_prefix()
+    chosen: Path | None = None
+    for key, _display, prefix in CAR_BRAND_SPECS:
+        if key not in lower:
+            continue
+        paths = by_pref.get(prefix.lower(), [])
+        if paths:
+            chosen = random.choice(paths)
+        break
+    if chosen is None:
         return None
     try:
-        im = Image.open(path)
+        im = Image.open(chosen)
         if im.mode != "RGBA":
             im = im.convert("RGBA")
         # Rendre le fond blanc / quasi blanc transparent
@@ -1287,7 +1481,6 @@ def run_captions(args) -> None:
     OUTPUT_CAPTION_IMAGES.mkdir(parents=True, exist_ok=True)
     OUTPUT_CAPTION_VIDEOS.mkdir(parents=True, exist_ok=True)
     font_size = max(36, int(CAPTION_HEIGHT * 0.032))
-    font = get_font(font_size)
     skip_videos = False
     if not args.images_only and not check_ffmpeg():
         skip_videos = True
@@ -1310,6 +1503,7 @@ def run_captions(args) -> None:
 
     for out_idx, cap_idx in enumerate(selected_indices):
         text = captions_all[cap_idx]
+        font = get_font(font_size)
         img = render_caption_image(text, font)
         name = f"caption_{out_idx:04d}.png"
         img_path = OUTPUT_CAPTION_IMAGES / name
@@ -1350,7 +1544,7 @@ def run_videos_only():
             width, height = im.size
         video_path = OUTPUT_VIDEOS_DIR / image_path.name.replace(".png", ".mp4")
         ap = (AUDIO_SINGLE if (AUDIO_SINGLE and AUDIO_SINGLE.exists()) else None) or (
-            audio_list[idx % len(audio_list)] if audio_list else None
+            random.choice(audio_list) if audio_list else None
         )
         if image_to_video(image_path, video_path, width, height, ap):
             print(f"  -> {video_path.name}")
